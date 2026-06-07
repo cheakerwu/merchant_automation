@@ -1,0 +1,24 @@
+[project]
+name = "merchant-automation"
+version = "0.1.0"
+description = "Operation and Recipe core for merchant backend automation"
+requires-python = ">=3.11"
+dependencies = [
+    "aiosqlite>=0.19",
+    "browser-use",
+    "cryptography>=42",
+    "fastapi>=0.110",
+    "langchain-core>=0.3",
+    "lark-oapi>=1.4",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "uuid7>=0.1",
+    "uvicorn>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[project.scripts]
+merchant-explore = "merchant_automation.explore:main"
