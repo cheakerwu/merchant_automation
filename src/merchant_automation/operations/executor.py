@@ -200,11 +200,24 @@ class RecipeStepExecutor:
 			f'等待 {duration}s',
 		)
 
-	def _do_stop_before_submit(
+	async def _do_stop_before_submit(
 		self,
 		step: RecipeStep,
 		recorder: TraceRecorder,
 	) -> None:
+		# 截图作为证据，确认修改正确
+		try:
+			screenshot_bytes = await self._session.take_screenshot()
+			with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+				tmp.write(screenshot_bytes)
+				recorder.record_step(
+					TraceStepKind.SCREENSHOT,
+					'停在提交前 - 截图确认',
+					screenshot_path=tmp.name,
+				)
+		except Exception:
+			logger.warning('STOP_BEFORE_SUBMIT 截图失败', exc_info=True)
+
 		recorder.record_step(
 			TraceStepKind.ACTION,
 			step.description or '停在提交前',
