@@ -267,8 +267,11 @@ def test_counts_recent_failures(
 	sample_recipe_def,
 ):
 	"""ExecutionRouter should count failures from OperationStore and skip step executor when failures > 0."""
+	from datetime import datetime, timedelta, timezone
 	from merchant_automation.operations.router import ExecutionRouter
 	from merchant_automation.operations.storage import TraceSummary
+
+	recent_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 	mock_store = MagicMock()
 	failed_traces = [
@@ -280,7 +283,7 @@ def test_counts_recent_failures(
 			recipe_id='meituan.update_store_phone.v1',
 			mode=ExecutionMode.PREPARE,
 			outcome_status=TraceOutcomeStatus.FAILED,
-			created_at='2026-01-01T00:00:00Z',
+			created_at=recent_time,
 		),
 		TraceSummary(
 			trace_id='t2',
@@ -290,7 +293,7 @@ def test_counts_recent_failures(
 			recipe_id='meituan.update_store_phone.v1',
 			mode=ExecutionMode.PREPARE,
 			outcome_status=TraceOutcomeStatus.FAILED,
-			created_at='2026-01-01T00:00:00Z',
+			created_at=recent_time,
 		),
 		TraceSummary(
 			trace_id='t3',
@@ -300,7 +303,7 @@ def test_counts_recent_failures(
 			recipe_id='meituan.update_store_phone.v1',
 			mode=ExecutionMode.PREPARE,
 			outcome_status=TraceOutcomeStatus.SUCCESS,
-			created_at='2026-01-01T00:00:00Z',
+			created_at=recent_time,
 		),
 	]
 	mock_store.list_traces.return_value = failed_traces
@@ -330,8 +333,11 @@ async def test_skips_step_executor_when_recent_failures(
 	sample_recipe_def,
 ):
 	"""When recent failures > 0, ExecutionRouter should skip RecipeStepExecutor and go directly to AgentExplorer."""
+	from datetime import datetime, timedelta, timezone
 	from merchant_automation.operations.router import ExecutionRouter
 	from merchant_automation.operations.storage import TraceSummary
+
+	recent_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 	mock_store = MagicMock()
 	mock_store.list_traces.return_value = [
@@ -343,7 +349,7 @@ async def test_skips_step_executor_when_recent_failures(
 			recipe_id='meituan.update_store_phone.v1',
 			mode=ExecutionMode.PREPARE,
 			outcome_status=TraceOutcomeStatus.FAILED,
-			created_at='2026-01-01T00:00:00Z',
+			created_at=recent_time,
 		),
 	]
 
@@ -457,3 +463,206 @@ async def test_router_does_not_overwrite_promoted_recipe(
 	# Should NOT have called save_definition (recipe already promoted)
 	mock_recipe_store.save_definition.assert_not_called()
 	mock_recipe_store.upsert_recipe.assert_not_called()
+
+
+# ---------- Test 10: counts only recent failures within time window ----------
+
+def test_counts_only_recent_failures_within_time_window(
+	mock_browser_session,
+	mock_llm,
+	sample_bound_task,
+):
+	"""Should only count failures within the configured time window, ignoring old failures."""
+	from datetime import datetime, timedelta, timezone
+	from merchant_automation.operations.router import ExecutionRouter, RECENT_FAILURE_WINDOW_HOURS
+	from merchant_automation.operations.storage import TraceSummary
+
+	now = datetime.now(timezone.utc)
+	recent_time = (now - timedelta(hours=1)).isoformat()
+	old_time = (now - timedelta(hours=RECENT_FAILURE_WINDOW_HOURS + 1)).isoformat()
+
+	mock_store = MagicMock()
+	mock_store.list_traces.return_value = [
+		TraceSummary(
+			trace_id='t-old',
+			operation_id='update_store_phone',
+			platform='meituan',
+			store_id='A店',
+			recipe_id='meituan.update_store_phone.v1',
+			mode=ExecutionMode.PREPARE,
+			outcome_status=TraceOutcomeStatus.FAILED,
+			created_at=old_time,
+		),
+		TraceSummary(
+			trace_id='t-recent',
+			operation_id='update_store_phone',
+			platform='meituan',
+			store_id='A店',
+			recipe_id='meituan.update_store_phone.v1',
+			mode=ExecutionMode.PREPARE,
+			outcome_status=TraceOutcomeStatus.FAILED,
+			created_at=recent_time,
+		),
+	]
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		mock_llm,
+		store=mock_store,
+	)
+
+	count = router._count_recent_failures('meituan.update_store_phone.v1')
+
+	# Should only count the recent failure, not the old one
+	assert count == 1
+
+
+# ---------- Test 11: ignores old failures ----------
+
+def test_ignores_old_failures(
+	mock_browser_session,
+	mock_llm,
+	sample_bound_task,
+	sample_recipe_def,
+):
+	"""Old failures should not block step executor execution."""
+	from datetime import datetime, timedelta, timezone
+	from merchant_automation.operations.router import ExecutionRouter, RECENT_FAILURE_WINDOW_HOURS
+	from merchant_automation.operations.storage import TraceSummary
+
+	old_time = (datetime.now(timezone.utc) - timedelta(hours=RECENT_FAILURE_WINDOW_HOURS + 1)).isoformat()
+
+	mock_store = MagicMock()
+	mock_store.list_traces.return_value = [
+		TraceSummary(
+			trace_id='t-old-1',
+			operation_id='update_store_phone',
+			platform='meituan',
+			store_id='A店',
+			recipe_id='meituan.update_store_phone.v1',
+			mode=ExecutionMode.PREPARE,
+			outcome_status=TraceOutcomeStatus.FAILED,
+			created_at=old_time,
+		),
+		TraceSummary(
+			trace_id='t-old-2',
+			operation_id='update_store_phone',
+			platform='meituan',
+			store_id='A店',
+			recipe_id='meituan.update_store_phone.v1',
+			mode=ExecutionMode.PREPARE,
+			outcome_status=TraceOutcomeStatus.FAILED,
+			created_at=old_time,
+		),
+	]
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		mock_llm,
+		store=mock_store,
+	)
+
+	count = router._count_recent_failures('meituan.update_store_phone.v1')
+
+	# Old failures should be ignored
+	assert count == 0
+
+
+# ---------- Test 12: validates synthesized recipe before saving ----------
+
+@pytest.mark.asyncio
+@patch('merchant_automation.operations.router.AgentExplorer')
+@patch('merchant_automation.operations.router.RecipeStepExecutor')
+async def test_router_validates_synthesized_recipe_before_saving(
+	mock_step_class,
+	mock_explorer_class,
+	mock_browser_session,
+	mock_llm,
+	sample_bound_task,
+):
+	"""Router should validate synthesized recipe by dry-run before saving to store."""
+	from merchant_automation.operations.router import ExecutionRouter
+	from merchant_automation.operations.recipe_store import RecipeStore
+
+	# Mock explorer to return success with valid history
+	mock_explorer = MagicMock()
+	mock_explorer_class.return_value = mock_explorer
+	mock_explorer.explore = AsyncMock(return_value=_make_success_trace())
+	mock_explorer.last_history = MagicMock()
+	mock_explorer.last_history.model_actions.return_value = [
+		{'navigate': {'url': 'https://example.com'}, 'interacted_element': None},
+	]
+
+	# Mock step executor for validation (dry_run succeeds)
+	mock_executor = MagicMock()
+	mock_step_class.return_value = mock_executor
+	mock_executor.execute_sync.return_value = _make_success_trace()
+
+	# Mock recipe store
+	mock_recipe_store = MagicMock(spec=RecipeStore)
+	mock_recipe_store.get_definition.return_value = None
+	mock_recipe_store.get_recipe.return_value = None
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		mock_llm,
+		recipe_store=mock_recipe_store,
+		_validate_synthesized=True,
+	)
+	trace = await router.execute(sample_bound_task)
+
+	# Should have validated with step executor
+	mock_executor.execute_sync.assert_called_once()
+	# Should have saved definition after successful validation
+	mock_recipe_store.save_definition.assert_called_once()
+
+
+# ---------- Test 13: skips saving when validation fails ----------
+
+@pytest.mark.asyncio
+@patch('merchant_automation.operations.router.AgentExplorer')
+@patch('merchant_automation.operations.router.RecipeStepExecutor')
+async def test_router_skips_saving_when_validation_fails(
+	mock_step_class,
+	mock_explorer_class,
+	mock_browser_session,
+	mock_llm,
+	sample_bound_task,
+):
+	"""Router should NOT save definition when dry-run validation fails."""
+	from merchant_automation.operations.executor import StepExecutionError
+	from merchant_automation.operations.router import ExecutionRouter
+	from merchant_automation.operations.recipe_store import RecipeStore
+
+	# Mock explorer to return success with history
+	mock_explorer = MagicMock()
+	mock_explorer_class.return_value = mock_explorer
+	mock_explorer.explore = AsyncMock(return_value=_make_success_trace())
+	mock_explorer.last_history = MagicMock()
+	mock_explorer.last_history.model_actions.return_value = [
+		{'navigate': {'url': 'https://example.com'}, 'interacted_element': None},
+	]
+
+	# Mock step executor for validation (dry_run fails)
+	mock_executor = MagicMock()
+	mock_step_class.return_value = mock_executor
+	failed_step = RecipeStep(action=RecipeStepAction.NAVIGATE, url='https://example.com')
+	mock_executor.execute_sync.side_effect = StepExecutionError('validation failed', 0, failed_step)
+
+	# Mock recipe store
+	mock_recipe_store = MagicMock(spec=RecipeStore)
+	mock_recipe_store.get_definition.return_value = None
+	mock_recipe_store.get_recipe.return_value = None
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		mock_llm,
+		recipe_store=mock_recipe_store,
+		_validate_synthesized=True,
+	)
+	trace = await router.execute(sample_bound_task)
+
+	# Should have attempted validation
+	mock_executor.execute_sync.assert_called_once()
+	# Should NOT have saved definition (validation failed)
+	mock_recipe_store.save_definition.assert_not_called()

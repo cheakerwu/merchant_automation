@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from browser_use import BrowserSession
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -18,6 +19,10 @@ from merchant_automation.operations.traces import ExecutionTrace, TraceOutcomeSt
 
 logger = logging.getLogger(__name__)
 
+# Time window for counting recent failures (hours).
+# Failures older than this are ignored, allowing newly synthesized recipes to proceed.
+RECENT_FAILURE_WINDOW_HOURS = 24
+
 # Statuses that are considered "promoted" — auto-synthesis must not overwrite them.
 _PROMOTED_STATUSES = {RecipeStatus.PREPARE_READY, RecipeStatus.COMMIT_READY}
 
@@ -32,12 +37,14 @@ class ExecutionRouter:
 		store: OperationStore | None = None,
 		recipe_definitions: dict[str, RecipeDefinition] | None = None,
 		recipe_store: RecipeStore | None = None,
+		_validate_synthesized: bool = False,
 	) -> None:
 		self._session = browser_session
 		self._llm = llm
 		self._store = store
 		self._recipe_defs = recipe_definitions or {}
 		self._recipe_store = recipe_store
+		self._validate_synthesized = _validate_synthesized
 		self._step_executor = RecipeStepExecutor(browser_session, llm)
 		self._explorer = AgentExplorer(browser_session, llm) if llm else None
 
@@ -139,6 +146,13 @@ class ExecutionRouter:
 				recipe_id=recipe_id,
 				params=bound_task.task.params,
 			)
+
+			# Validate synthesized recipe before saving (if enabled)
+			if self._validate_synthesized:
+				if not self._validate_definition(defn, bound_task):
+					logger.warning('Synthesized recipe validation failed for %s, skipping save', recipe_id)
+					return
+
 			self._recipe_store.save_definition(defn, source='auto')
 			logger.info('Synthesized candidate recipe definition for %s (%d steps)', recipe_id, len(defn.steps))
 
@@ -156,12 +170,59 @@ class ExecutionRouter:
 		except Exception:
 			logger.warning('Failed to synthesize recipe definition for %s', recipe_id, exc_info=True)
 
+	def _validate_definition(self, defn: RecipeDefinition, bound_task: BoundOperationTask) -> bool:
+		"""Validate synthesized recipe by dry-run execution.
+
+		Returns True if validation passes, False otherwise.
+		"""
+		try:
+			# Create a dry-run recorder (no persistence)
+			from merchant_automation.operations.traces import TraceRecorder
+			recorder = TraceRecorder.start(bound_task, raw_input='validation')
+
+			# Execute in DRY_RUN mode to validate steps
+			trace = self._step_executor.execute_sync(
+				defn,
+				bound_task.task.params,
+				recorder,
+				mode=ExecutionMode.DRY_RUN,
+			)
+
+			# Check if execution succeeded
+			if trace.outcome and trace.outcome.status == TraceOutcomeStatus.SUCCESS:
+				logger.info('Recipe validation passed for %s', defn.recipe_id)
+				return True
+			else:
+				logger.warning('Recipe validation failed for %s: %s', defn.recipe_id, trace.outcome)
+				return False
+		except Exception as exc:
+			logger.warning('Recipe validation error for %s: %s', defn.recipe_id, exc)
+			return False
+
 	def _count_recent_failures(self, recipe_id: str) -> int:
+		"""Count failures within the configured time window.
+
+		Only failures from the last RECENT_FAILURE_WINDOW_HOURS are counted.
+		This prevents old failures from permanently blocking newly synthesized recipes.
+		"""
 		if self._store is None:
 			return 0
+
+		cutoff = datetime.now(timezone.utc) - timedelta(hours=RECENT_FAILURE_WINDOW_HOURS)
 		traces = self._store.list_traces()
-		return sum(
-			1 for t in traces
-			if t.recipe_id == recipe_id and t.outcome_status == TraceOutcomeStatus.FAILED
-		)
+
+		count = 0
+		for t in traces:
+			if t.recipe_id != recipe_id or t.outcome_status != TraceOutcomeStatus.FAILED:
+				continue
+			try:
+				trace_time = datetime.fromisoformat(t.created_at)
+				if trace_time.tzinfo is None:
+					trace_time = trace_time.replace(tzinfo=timezone.utc)
+				if trace_time >= cutoff:
+					count += 1
+			except (ValueError, TypeError):
+				# If we can't parse the time, count it as recent to be safe
+				count += 1
+		return count
 

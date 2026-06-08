@@ -16,7 +16,7 @@ from merchant_automation.operations.recipe_definition import (
 	RecipeStepAction,
 )
 from merchant_automation.operations.schemas import ExecutionMode, FailureType
-from merchant_automation.operations.traces import TraceRecorder, TraceStepKind
+from merchant_automation.operations.traces import ExecutionTrace, TraceRecorder, TraceStepKind
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,21 @@ class RecipeStepExecutor:
 
 		recorder.complete('执行完成')
 		return recorder.trace
+
+	def execute_sync(
+		self,
+		recipe: RecipeDefinition,
+		params: dict[str, object],
+		recorder: TraceRecorder,
+		*,
+		mode: ExecutionMode = ExecutionMode.DRY_RUN,
+	) -> ExecutionTrace:
+		"""Synchronous wrapper for execute() — used for validation."""
+		loop = asyncio.new_event_loop()
+		try:
+			return loop.run_until_complete(self.execute(recipe, params, recorder, mode=mode))
+		finally:
+			loop.close()
 
 	async def _execute_step(
 		self,
