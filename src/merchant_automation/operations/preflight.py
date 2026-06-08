@@ -36,6 +36,7 @@ def evaluate_preflight(
 	recipe: RecipeMetadata,
 	requested_mode: ExecutionMode,
 	policy: CommitPolicy,
+	confirmed: bool = False,
 ) -> PreflightResult:
 	if recipe.status == RecipeStatus.DISABLED:
 		return PreflightResult(
@@ -55,6 +56,15 @@ def evaluate_preflight(
 
 	if requested_mode != ExecutionMode.COMMIT:
 		return PreflightResult(allowed=True, requested_mode=requested_mode, effective_mode=requested_mode)
+
+	# 高风险操作需要二次确认
+	if operation.risk_level == 'high' and not confirmed:
+		return PreflightResult(
+			allowed=True,
+			requested_mode=requested_mode,
+			effective_mode=ExecutionMode.PREPARE,
+			reasons=['high_risk_operation_requires_confirmation'],
+		)
 
 	reasons: list[str] = []
 	if not policy.global_commit_enabled:

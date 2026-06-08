@@ -321,6 +321,7 @@ class OperationCatalog:
 					success_criteria=['保存后员工列表不包含目标员工', '返回执行截图'],
 					forbidden_actions=['不能删除管理员账号'],
 					allow_commit=True,
+					risk_level='high',
 				),
 			}
 		)

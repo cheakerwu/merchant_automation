@@ -41,6 +41,7 @@ class OperationContract(BaseModel):
 	success_criteria: list[str] = Field(default_factory=list)
 	forbidden_actions: list[str] = Field(default_factory=list)
 	allow_commit: bool = False
+	risk_level: str = 'normal'  # 'normal', 'high'
 
 
 class RecipeMetadata(BaseModel):
