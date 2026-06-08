@@ -21,4 +21,6 @@ def sanitize_user_message(message: str) -> str:
         return "图片已保存，可以继续发送门店照片更新指令。"
     for pattern in BACKEND_EXPOSURE_PATTERNS:
         normalized = pattern.sub("", normalized).strip()
+    if not normalized:
+        return "操作已完成。"
     return normalized
