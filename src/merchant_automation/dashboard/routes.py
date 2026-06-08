@@ -308,25 +308,112 @@ def _page(title: str, body: str) -> str:
 <html lang="zh-CN">
 <head>
 	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>{escape(title)}</title>
 	<style>
-		body {{ font-family: Arial, "Microsoft YaHei", sans-serif; margin: 24px; color: #1f2937; }}
-		nav a {{ margin-right: 16px; color: #0f766e; }}
-		table {{ border-collapse: collapse; width: 100%; margin-top: 16px; }}
-		th, td {{ border-bottom: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; }}
-		th {{ background: #f9fafb; }}
+		* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+		body {{
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+			background: #f8fafc;
+			color: #1e293b;
+			line-height: 1.6;
+		}}
+		.container {{ max-width: 1200px; margin: 0 auto; padding: 0 24px; }}
+		nav {{
+			background: #ffffff;
+			border-bottom: 1px solid #e2e8f0;
+			padding: 16px 0;
+			margin-bottom: 32px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+		}}
+		nav .container {{ display: flex; align-items: center; gap: 32px; }}
+		nav .logo {{ font-size: 20px; font-weight: 700; color: #0f172a; text-decoration: none; }}
+		nav a {{
+			color: #64748b;
+			text-decoration: none;
+			font-size: 14px;
+			font-weight: 500;
+			padding: 8px 12px;
+			border-radius: 6px;
+			transition: all 0.2s;
+		}}
+		nav a:hover {{ background: #f1f5f9; color: #0f172a; }}
+		nav a.active {{ background: #0f172a; color: #ffffff; }}
+		h1 {{
+			font-size: 28px;
+			font-weight: 700;
+			color: #0f172a;
+			margin-bottom: 24px;
+		}}
+		.card {{
+			background: #ffffff;
+			border-radius: 12px;
+			box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+			padding: 24px;
+			margin-bottom: 24px;
+		}}
+		table {{ border-collapse: collapse; width: 100%; }}
+		th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid #f1f5f9; }}
+		th {{
+			background: #f8fafc;
+			font-weight: 600;
+			color: #475569;
+			font-size: 13px;
+			text-transform: uppercase;
+			letter-spacing: 0.05em;
+		}}
+		tr:hover {{ background: #f8fafc; }}
+		.badge {{
+			display: inline-block;
+			padding: 4px 10px;
+			border-radius: 20px;
+			font-size: 12px;
+			font-weight: 600;
+		}}
+		.badge-success {{ background: #dcfce7; color: #166534; }}
+		.badge-warning {{ background: #fef3c7; color: #92400e; }}
+		.badge-danger {{ background: #fee2e2; color: #991b1b; }}
+		.badge-info {{ background: #dbeafe; color: #1e40af; }}
+		.btn {{
+			display: inline-block;
+			padding: 8px 16px;
+			border-radius: 6px;
+			font-size: 14px;
+			font-weight: 500;
+			text-decoration: none;
+			cursor: pointer;
+			border: none;
+			transition: all 0.2s;
+		}}
+		.btn-primary {{ background: #0f172a; color: #ffffff; }}
+		.btn-primary:hover {{ background: #1e293b; }}
+		.btn-secondary {{ background: #f1f5f9; color: #475569; }}
+		.btn-secondary:hover {{ background: #e2e8f0; }}
+		.empty-state {{
+			text-align: center;
+			padding: 48px 24px;
+			color: #94a3b8;
+		}}
+		.empty-state svg {{ margin-bottom: 16px; }}
 	</style>
 </head>
 <body>
 	<nav>
-		<a href="/dashboard">任务中心</a>
-		<a href="/dashboard/traces">轨迹中心</a>
-		<a href="/dashboard/failures">失败分析</a>
-		<a href="/dashboard/recipes">Recipe 控制台</a>
-		<a href="/dashboard/accounts">账号门店</a>
+		<div class="container">
+			<a href="/dashboard" class="logo">🤖 商家助手</a>
+			<a href="/dashboard" class="{'active' if title == '任务中心' else ''}">任务中心</a>
+			<a href="/dashboard/traces" class="{'active' if title == '轨迹中心' else ''}">轨迹中心</a>
+			<a href="/dashboard/failures" class="{'active' if title == '失败分析' else ''}">失败分析</a>
+			<a href="/dashboard/recipes" class="{'active' if title == 'Recipe 控制台' else ''}">Recipe 控制台</a>
+			<a href="/dashboard/accounts" class="{'active' if '账号' in title or '门店' in title else ''}">账号门店</a>
+		</div>
 	</nav>
-	<h1>{escape(title)}</h1>
-	{body}
+	<div class="container">
+		<h1>{escape(title)}</h1>
+		<div class="card">
+			{body}
+		</div>
+	</div>
 </body>
 </html>'''
 

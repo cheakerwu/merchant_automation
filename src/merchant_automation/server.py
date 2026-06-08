@@ -779,15 +779,28 @@ def _is_store_photo_image_task(text: str) -> bool:
 	return has_photo_target and has_latest_image
 
 
+def _select_latest_usable_image(attachments: list[Attachment]) -> Attachment | None:
+	"""Select the most recent usable image attachment.
+
+	Priority:
+	1. Already downloaded images (local_path exists and status is 'downloaded')
+	2. Images with feishu_file_key (can be downloaded)
+	"""
+	for attachment in attachments:
+		if attachment.file_type == 'image' and attachment.local_path and attachment.status == 'downloaded':
+			return attachment
+	for attachment in attachments:
+		if attachment.file_type == 'image' and attachment.feishu_file_key:
+			return attachment
+	return None
+
+
 async def _resolve_store_photo_attachment(text: str, *, chat_id: str, user_id: str) -> Attachment | None:
 	if not _is_store_photo_image_task(text):
 		return None
 
 	attachments = await _task_queue.get_recent_attachments(chat_id=chat_id, user_id=user_id, limit=5)
-	for attachment in attachments:
-		if attachment.file_type == 'image' and attachment.feishu_file_key:
-			return attachment
-	return None
+	return _select_latest_usable_image(attachments)
 
 
 def _hydrate_latest_image_attachment(bound_task: BoundOperationTask, attachments: list[Attachment]) -> BoundOperationTask:
@@ -795,14 +808,7 @@ def _hydrate_latest_image_attachment(bound_task: BoundOperationTask, attachments
 	if bound_task.task.params.get('attachment_id') != 'latest_image':
 		return bound_task
 
-	image_attachment = next(
-		(
-			attachment
-			for attachment in attachments
-			if attachment.file_type == 'image' and attachment.feishu_file_key
-		),
-		None,
-	)
+	image_attachment = _select_latest_usable_image(attachments)
 	if image_attachment is None:
 		return bound_task
 
