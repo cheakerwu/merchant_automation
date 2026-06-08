@@ -49,6 +49,10 @@ class RecipeStepExecutor:
 	) -> 'ExecutionTrace':
 		"""Execute recipe steps sequentially. Raises StepExecutionError on failure."""
 		for i, step in enumerate(recipe.steps):
+			# COMMIT 模式下跳过 STOP_BEFORE_SUBMIT
+			if step.action == RecipeStepAction.STOP_BEFORE_SUBMIT and mode == ExecutionMode.COMMIT:
+				continue
+
 			try:
 				should_stop = await self._execute_step(step, i, params, recorder)
 				if should_stop:
@@ -100,7 +104,7 @@ class RecipeStepExecutor:
 		elif action == RecipeStepAction.WAIT:
 			await self._do_wait(step, recorder)
 		elif action == RecipeStepAction.STOP_BEFORE_SUBMIT:
-			self._do_stop_before_submit(step, recorder)
+			await self._do_stop_before_submit(step, recorder)
 			return True
 		elif action == RecipeStepAction.VERIFY:
 			await self._do_verify(step, step_index, recorder)
@@ -162,7 +166,10 @@ class RecipeStepExecutor:
 			raise StepExecutionError('CLICK 步骤缺少 target', step_index, step)
 		index = await self._find_element(step.target)
 		element = await self._get_element_by_index(index, step, step_index)
-		await element.click()
+		try:
+			await element.click()
+		except RuntimeError as exc:
+			raise StepExecutionError(f'点击元素失败: {exc}', step_index, step) from exc
 		recorder.record_step(
 			TraceStepKind.ACTION,
 			step.description or f'点击 {step.target}',
@@ -203,6 +210,11 @@ class RecipeStepExecutor:
 		step: RecipeStep,
 		recorder: TraceRecorder,
 	) -> None:
+		recorder.record_step(
+			TraceStepKind.ACTION,
+			step.description or '停在提交前',
+		)
+
 		# 截图作为证据，确认修改正确
 		try:
 			screenshot_bytes = await self._session.take_screenshot()
@@ -215,11 +227,6 @@ class RecipeStepExecutor:
 				)
 		except Exception:
 			logger.warning('STOP_BEFORE_SUBMIT 截图失败', exc_info=True)
-
-		recorder.record_step(
-			TraceStepKind.ACTION,
-			step.description or '停在提交前',
-		)
 
 	async def _do_verify(
 		self,
