@@ -140,15 +140,17 @@ class MerchantTaskExecutor:
 			if result.input_issues or result.plan_issues:
 				issues = result.input_issues + result.plan_issues
 				reason = '; '.join(issue.reason for issue in issues[:3])
+				from merchant_automation.operations.failure import user_failure_message
+				user_reason = user_failure_message('planning_failed', f'无法解析指令: {reason}')
 				await self._set_status(
 					task,
 					TaskStatus.FAILED,
 					error=f'解析失败: {reason}',
 					error_type='planning_failed',
-					error_message_user=f'无法解析指令: {reason}',
+					error_message_user=user_reason,
 					error_message_internal=str(issues),
 				)
-				await self._notify(task.chat_id, f'❌ 任务 {task.id[:8]} 解析失败: {reason}')
+				await self._notify(task.chat_id, user_reason)
 				return
 
 			if not result.bound_tasks:
@@ -172,15 +174,17 @@ class MerchantTaskExecutor:
 
 		except Exception as exc:
 			logger.exception('Task %s execution failed', task.id)
+			from merchant_automation.operations.failure import user_failure_message
+			user_reason = user_failure_message('execution_error', f'执行异常: {str(exc)[:100]}')
 			await self._set_status(
 				task,
 				TaskStatus.FAILED,
 				error=str(exc),
 				error_type='execution_error',
-				error_message_user=f'执行异常: {str(exc)[:100]}',
+				error_message_user=user_reason,
 				error_message_internal=str(exc),
 			)
-			await self._notify(task.chat_id, f'❌ 任务 {task.id[:8]} 执行异常: {str(exc)[:50]}')
+			await self._notify(task.chat_id, user_reason)
 
 	async def _ensure_local_image_attachments(self, attachments: list[Attachment]) -> list[Attachment]:
 		"""Download linked Feishu images before browser upload tasks execute."""
@@ -265,15 +269,17 @@ class MerchantTaskExecutor:
 				)
 			else:
 				failure_msg = trace.outcome.message if trace.outcome else '未知错误'
+				from merchant_automation.operations.failure import user_failure_message
+				user_reason = user_failure_message('recipe_execution_failed', f'执行失败: {failure_msg}')
 				await self._set_status(
 					task,
 					TaskStatus.FAILED,
 					error=failure_msg,
 					error_type='recipe_execution_failed',
-					error_message_user=f'执行失败: {failure_msg}',
+					error_message_user=user_reason,
 					error_message_internal=failure_msg,
 				)
-				await self._notify(task.chat_id, f'❌ 任务 {task.id[:8]} 执行失败: {failure_msg}')
+				await self._notify(task.chat_id, user_reason)
 
 		finally:
 			try:

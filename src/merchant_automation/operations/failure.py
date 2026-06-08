@@ -5,6 +5,21 @@ from pydantic import BaseModel, ConfigDict
 from merchant_automation.operations.schemas import FailureType
 from merchant_automation.operations.traces import ExecutionTrace, TraceOutcomeStatus
 
+USER_FAILURE_MESSAGES = {
+    "planning_failed": "我还没理解这条指令，请补充店铺和要修改的内容。",
+    "login_required": "账号需要重新登录。",
+    "attachment_missing": "没有找到可用图片，请先上传图片。",
+    "attachment_download_failed": "图片下载失败，请重新发送图片。",
+    "recipe_execution_failed": "后台操作失败，请查看任务详情或稍后重试。",
+    "execution_error": "任务执行异常，请稍后重试。",
+}
+
+
+def user_failure_message(error_type: str | None, fallback: str | None = None) -> str:
+    if error_type and error_type in USER_FAILURE_MESSAGES:
+        return USER_FAILURE_MESSAGES[error_type]
+    return fallback or "任务执行失败，请稍后重试。"
+
 
 class FailureAnalysis(BaseModel):
 	model_config = ConfigDict(extra='forbid')
