@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import tempfile
 from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -101,3 +102,27 @@ class TraceRecorder:
 		)
 		return self.trace
 
+
+def record_screenshot_bytes(
+	recorder: TraceRecorder,
+	message: str,
+	screenshot_bytes: bytes,
+) -> TraceStep:
+	tmp = tempfile.NamedTemporaryFile(
+		suffix='.png', delete=False, prefix='recipe_'
+	)
+	tmp.write(screenshot_bytes)
+	tmp.close()
+	return recorder.record_step(
+		TraceStepKind.SCREENSHOT,
+		message,
+		screenshot_path=tmp.name,
+	)
+
+
+def trace_screenshot_paths(trace: ExecutionTrace) -> list[str]:
+	return [
+		step.screenshot_path
+		for step in trace.steps
+		if step.kind == TraceStepKind.SCREENSHOT and step.screenshot_path
+	]

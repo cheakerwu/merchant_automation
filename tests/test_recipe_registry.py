@@ -26,6 +26,17 @@ def test_default_registry_has_no_commit_ready_image_recipe():
 	assert ExecutionMode.COMMIT not in recipe.allowed_modes
 
 
+def test_default_registry_allows_store_photo_commit_recipe():
+	registry = RecipeRegistry.default()
+
+	recipe = registry.select(platform='meituan', operation_id='update_store_decoration_image')
+
+	assert recipe.recipe_id == 'meituan.update_store_decoration_image.v1'
+	assert recipe.status == RecipeStatus.COMMIT_READY
+	assert ExecutionMode.COMMIT in recipe.allowed_modes
+	assert recipe.success_rates[ExecutionMode.COMMIT] == 0.95
+
+
 def test_registry_raises_for_missing_recipe():
 	registry = RecipeRegistry(recipes=[])
 

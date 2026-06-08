@@ -8,12 +8,14 @@ from merchant_automation import server
 from merchant_automation.operations.binder import BoundOperationTask
 from merchant_automation.operations.preflight import PreflightResult
 from merchant_automation.operations.schemas import ExecutionMode, OperationTask, RecipeMetadata, RecipeStatus
+from merchant_automation.operations.service import OperationPlanningService
 from merchant_automation.tasks.models import Attachment
 
 
 class FakeTaskQueue:
 	def __init__(self) -> None:
 		self.attachments: list[object] = []
+		self.updated: list[object] = []
 		self.submitted: list[object] = []
 		self.linked: list[tuple[str, str, str]] = []
 		self.recent: list[Attachment] = []
@@ -21,6 +23,13 @@ class FakeTaskQueue:
 	async def add_attachment(self, attachment: object) -> str:
 		self.attachments.append(attachment)
 		return getattr(attachment, 'id')
+
+	async def update_attachment(self, attachment: object) -> None:
+		self.updated.append(attachment)
+		for index, existing in enumerate(self.attachments):
+			if getattr(existing, 'id', None) == getattr(attachment, 'id', None):
+				self.attachments[index] = attachment
+				break
 
 	async def submit(self, task: object) -> None:
 		self.submitted.append(task)
@@ -46,12 +55,33 @@ class FakeFeishuBot:
 		return 'card-msg-1'
 
 
+class FakeDownloader:
+	def __init__(self, *, fail: bool = False) -> None:
+		self.fail = fail
+		self.calls: list[Attachment] = []
+
+	async def ensure_local_file(self, attachment: Attachment) -> Attachment:
+		self.calls.append(attachment)
+		if self.fail:
+			raise RuntimeError('download failed')
+		return attachment.model_copy(
+			update={
+				'local_path': f'/tmp/attachments/{attachment.id}.png',
+				'sha256': 'abc123',
+				'size_bytes': 11,
+				'status': 'downloaded',
+			}
+		)
+
+
 @pytest.mark.asyncio
-async def test_image_message_records_attachment_metadata(monkeypatch):
+async def test_image_message_downloads_and_records_attachment_metadata(monkeypatch):
 	queue = FakeTaskQueue()
 	bot = FakeFeishuBot()
+	downloader = FakeDownloader()
 	monkeypatch.setattr(server, '_task_queue', queue)
 	monkeypatch.setattr(server, '_feishu_bot', bot)
+	monkeypatch.setattr(server, '_resource_downloader', downloader)
 
 	await server._handle_message_event(
 		{
@@ -74,15 +104,51 @@ async def test_image_message_records_attachment_metadata(monkeypatch):
 
 	assert len(queue.attachments) == 1
 	attachment = queue.attachments[0]
+	assert downloader.calls[0].id == attachment.id
 	assert attachment.file_type == 'image'
 	assert attachment.file_name == 'store-front.png'
 	assert attachment.mime_type == 'image/png'
 	assert attachment.feishu_file_key == 'img_v3_abc'
 	assert attachment.chat_id == 'chat-1'
 	assert attachment.uploaded_by_user_id == 'user-1'
+	assert attachment.local_path == f'/tmp/attachments/{attachment.id}.png'
+	assert attachment.sha256 == 'abc123'
+	assert attachment.size_bytes == 11
+	assert attachment.status == 'downloaded'
+	assert queue.updated == []
 	assert bot.replies
 	assert bot.replies[0][0] == 'msg-1'
-	assert '已记录图片附件' in bot.replies[0][1]
+	assert '图片已保存' in bot.replies[0][1]
+
+
+@pytest.mark.asyncio
+async def test_image_message_records_attachment_when_download_fails(monkeypatch):
+	queue = FakeTaskQueue()
+	bot = FakeFeishuBot()
+	downloader = FakeDownloader(fail=True)
+	monkeypatch.setattr(server, '_task_queue', queue)
+	monkeypatch.setattr(server, '_feishu_bot', bot)
+	monkeypatch.setattr(server, '_resource_downloader', downloader)
+
+	await server._handle_message_event(
+		{
+			'message': {
+				'chat_id': 'chat-1',
+				'message_id': 'msg-1',
+				'message_type': 'image',
+				'content': json.dumps({'image_key': 'img_v3_abc', 'file_name': 'store-front.png'}),
+			},
+			'sender': {'sender_id': {'open_id': 'user-1'}},
+		}
+	)
+
+	assert len(queue.attachments) == 1
+	attachment = queue.attachments[0]
+	assert attachment.feishu_file_key == 'img_v3_abc'
+	assert attachment.local_path is None
+	assert attachment.status == 'download_failed'
+	assert bot.replies
+	assert '图片已记录，但下载到本地失败' in bot.replies[0][1]
 
 
 @pytest.mark.asyncio
@@ -157,3 +223,68 @@ def test_latest_image_param_is_replaced_with_bound_attachment():
 	assert hydrated.task.params['attachment_file_name'] == 'store-front.png'
 	assert hydrated.task.params['local_image_path'] == 'D:\\attachments\\store-front.png'
 	assert hydrated.task.params['attachment_sha256'] == 'abc123'
+
+
+def test_latest_image_param_requires_local_path_for_upload():
+	bound = BoundOperationTask(
+		task=OperationTask(
+			platform='meituan',
+			store_id='江湖饭焗',
+			operation_id='update_store_decoration_image',
+			params={'attachment_id': 'latest_image'},
+			mode=ExecutionMode.COMMIT,
+		),
+		recipe=RecipeMetadata(
+			recipe_id='meituan.update_store_decoration_image.v1',
+			operation_id='update_store_decoration_image',
+			platform='meituan',
+			version=1,
+			status=RecipeStatus.COMMIT_READY,
+			allowed_modes={ExecutionMode.PREPARE, ExecutionMode.COMMIT},
+			success_rates={ExecutionMode.PREPARE: 0.75, ExecutionMode.COMMIT: 0.95},
+		),
+		preflight=PreflightResult(allowed=True, requested_mode=ExecutionMode.COMMIT, effective_mode=ExecutionMode.COMMIT),
+	)
+	attachment = Attachment(
+		id='att-1',
+		file_type='image',
+		file_name='store-front.png',
+		feishu_file_key='img_v3_abc',
+	)
+
+	with pytest.raises(ValueError, match='图片尚未下载到本地'):
+		server._hydrate_latest_image_attachment(bound, [attachment])
+
+
+def test_store_photo_task_requests_commit_mode_when_direct_publish_enabled():
+	mode, policy = server._execution_request_for_instruction('把美团 江湖饭焗 门店照片换成刚上传的图片')
+
+	assert mode == ExecutionMode.COMMIT
+	assert policy.global_commit_enabled is True
+	assert policy.account_commit_allowed is True
+	assert policy.store_commit_allowed is True
+
+
+def test_store_photo_planning_reaches_commit_mode():
+	mode, policy = server._execution_request_for_instruction('把美团 江湖饭焗 门店照片换成刚上传的图片')
+
+	result = OperationPlanningService().plan_text(
+		'把美团 江湖饭焗 门店照片换成刚上传的图片',
+		mode=mode,
+		policy=policy,
+	)
+
+	assert result.input_issues == []
+	assert result.binding_issues == []
+	assert len(result.bound_tasks) == 1
+	bound = result.bound_tasks[0]
+	assert bound.task.operation_id == 'update_store_decoration_image'
+	assert bound.task.mode == ExecutionMode.COMMIT
+	assert bound.preflight.effective_mode == ExecutionMode.COMMIT
+
+
+def test_non_image_task_uses_prepare_without_commit_policy():
+	mode, policy = server._execution_request_for_instruction('把美团 江湖饭焗 电话改成 13800138000')
+
+	assert mode == ExecutionMode.PREPARE
+	assert policy.global_commit_enabled is False

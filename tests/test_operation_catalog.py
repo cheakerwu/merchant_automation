@@ -7,7 +7,7 @@ def test_catalog_contains_first_batch_operations():
 	assert catalog.get('update_store_phone').title == '修改门店联系电话'
 	assert catalog.get('change_business_hours').allow_commit is True
 	assert catalog.get('replace_product_image').allow_commit is False
-	assert catalog.get('update_store_decoration_image').allow_commit is False
+	assert catalog.get('update_store_decoration_image').allow_commit is True
 
 
 def test_catalog_rejects_unknown_operation():

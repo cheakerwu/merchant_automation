@@ -73,6 +73,21 @@ def sample_bound_task():
 	)
 
 
+@pytest.fixture
+def prepare_bound_task(sample_bound_task):
+	return sample_bound_task.model_copy(
+		update={
+			'task': sample_bound_task.task.model_copy(update={'mode': ExecutionMode.PREPARE}),
+			'preflight': sample_bound_task.preflight.model_copy(
+				update={
+					'requested_mode': ExecutionMode.PREPARE,
+					'effective_mode': ExecutionMode.PREPARE,
+				}
+			),
+		}
+	)
+
+
 def test_explorer_builds_task_prompt(sample_operation):
 	explorer = AgentExplorer(MagicMock(), MagicMock())
 	prompt = explorer._build_task_prompt(sample_operation, {'phone': '13800138000'}, ExecutionMode.DRY_RUN)
@@ -131,6 +146,27 @@ def test_explorer_records_agent_steps(mock_agent_class, mock_browser_session, mo
 	assert all(step.kind == TraceStepKind.MODEL_JUDGEMENT for step in trace.steps)
 	assert 'Test Store Page' in trace.steps[0].message
 	assert trace.steps[0].url == 'https://example.com/store'
+
+
+@patch('merchant_automation.operations.explorer.Agent')
+def test_explorer_records_prepare_evidence_screenshot(mock_agent_class, mock_browser_session, mock_llm, sample_operation, prepare_bound_task):
+	mock_agent = MagicMock()
+	mock_agent_class.return_value = mock_agent
+	mock_agent.run = AsyncMock(return_value='探索完成')
+	mock_browser_session.take_screenshot.return_value = b'fake-png'
+
+	recorder = TraceRecorder.start(prepare_bound_task)
+	explorer = AgentExplorer(mock_browser_session, mock_llm)
+
+	trace = asyncio.run(
+		explorer.explore(sample_operation, {'phone': '13800138000'}, recorder, mode=ExecutionMode.PREPARE)
+	)
+
+	screenshot_steps = [step for step in trace.steps if step.kind == TraceStepKind.SCREENSHOT]
+	assert len(screenshot_steps) == 1
+	assert screenshot_steps[0].message == 'prepare 证据截图'
+	assert screenshot_steps[0].screenshot_path is not None
+	assert screenshot_steps[0].screenshot_path.endswith('.png')
 
 
 @patch('merchant_automation.operations.explorer.Agent')

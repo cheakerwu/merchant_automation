@@ -142,9 +142,9 @@ class OperationCatalog:
 					operation_id='update_store_decoration_image',
 					title='替换店铺装修图片',
 					required_params=['store_id', 'attachment_id'],
-					success_criteria=['prepare 模式停在最终提交前并返回截图'],
-					forbidden_actions=['不能提交未审核图片', '不能修改店铺基础信息'],
-					allow_commit=False,
+					success_criteria=['保存后重新进入页面，门店装修图片已更新', '返回执行截图'],
+					forbidden_actions=['不能修改店铺基础信息', '不能修改其他装修内容'],
+					allow_commit=True,
 				),
 				'update_store_banner': OperationContract(
 					operation_id='update_store_banner',
@@ -330,4 +330,3 @@ class OperationCatalog:
 			return self.operations[operation_id]
 		except KeyError as exc:
 			raise KeyError(f'Unsupported operation: {operation_id}') from exc
-

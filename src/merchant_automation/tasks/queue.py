@@ -186,6 +186,14 @@ _SELECT_BY_ID_SQL = "SELECT * FROM tasks WHERE id = ?"
 
 _SELECT_BY_PREFIX_SQL = "SELECT * FROM tasks WHERE id LIKE ? ORDER BY created_at DESC LIMIT 1"
 
+_SELECT_RECENT_TASKS_SQL = """
+SELECT * FROM tasks
+WHERE chat_id = ?
+  AND (? IS NULL OR user_id = ?)
+ORDER BY updated_at DESC, created_at DESC
+LIMIT ?
+"""
+
 _UPDATE_STATUS_SQL = """
 UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?
 """
@@ -387,6 +395,20 @@ class TaskQueue:
 			if row is None:
 				return None
 			return _row_to_task(row)
+
+	async def get_recent_tasks(
+		self,
+		chat_id: str,
+		user_id: str | None = None,
+		limit: int = 5,
+	) -> list[Task]:
+		"""Return recent tasks for a Feishu chat, optionally scoped to one user."""
+		self._ensure_started()
+		assert self._db is not None
+
+		async with self._db.execute(_SELECT_RECENT_TASKS_SQL, (chat_id, user_id, user_id, limit)) as cursor:
+			rows = await cursor.fetchall()
+			return [_row_to_task(row) for row in rows]
 
 	async def update_status(self, task_id: str, status: TaskStatus, **kwargs: Any) -> None:
 		"""Update a task's status and optionally other fields.
@@ -679,4 +701,3 @@ class TaskQueue:
 			TaskStatus.FAILED: "任务执行失败",
 			TaskStatus.CANCELLED: "任务已取消",
 		}.get(status, f"任务状态更新为 {status.value}")
-

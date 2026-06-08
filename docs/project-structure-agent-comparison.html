@@ -1,0 +1,1047 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Merchant Automation 项目结构与 Agent 工作流对比</title>
+	<style>
+		:root {
+			--paper: #f7f4ec;
+			--sheet: #fffdf7;
+			--ink: #17221d;
+			--muted: #667169;
+			--line: #ded7c9;
+			--green: #3e7458;
+			--green-soft: #e3eee7;
+			--blue: #426f8f;
+			--blue-soft: #e1ecf2;
+			--gold: #bd8437;
+			--gold-soft: #f3ead7;
+			--coral: #b85d4c;
+			--coral-soft: #f4e3dd;
+			--plum: #755b78;
+			--plum-soft: #eee6ef;
+			--shadow: 0 22px 60px rgba(44, 35, 22, 0.12);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		html {
+			scroll-behavior: smooth;
+		}
+
+		body {
+			margin: 0;
+			background:
+				linear-gradient(180deg, rgba(255,255,255,0.62), rgba(247,244,236,0.86)),
+				var(--paper);
+			color: var(--ink);
+			font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+			line-height: 1.58;
+		}
+
+		a {
+			color: inherit;
+			text-decoration-color: rgba(62, 116, 88, 0.45);
+			text-underline-offset: 3px;
+		}
+
+		.page {
+			width: min(1180px, calc(100vw - 32px));
+			margin: 0 auto;
+		}
+
+		.hero {
+			min-height: 82vh;
+			display: grid;
+			grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+			align-items: center;
+			gap: 34px;
+			padding: 54px 0 34px;
+		}
+
+		.eyebrow {
+			display: inline-flex;
+			align-items: center;
+			gap: 10px;
+			padding: 7px 10px;
+			border: 1px solid rgba(62, 116, 88, 0.24);
+			background: rgba(255, 253, 247, 0.78);
+			border-radius: 8px;
+			color: var(--green);
+			font-size: 13px;
+			font-weight: 760;
+		}
+
+		.eyebrow::before {
+			content: "";
+			width: 9px;
+			height: 9px;
+			background: var(--green);
+			border-radius: 50%;
+			box-shadow: 0 0 0 5px rgba(62, 116, 88, 0.12);
+		}
+
+		h1 {
+			max-width: 860px;
+			margin: 18px 0 18px;
+			font-size: clamp(42px, 7vw, 86px);
+			line-height: 0.96;
+			letter-spacing: 0;
+		}
+
+		h2 {
+			margin: 0 0 16px;
+			font-size: clamp(28px, 4vw, 46px);
+			line-height: 1.05;
+			letter-spacing: 0;
+		}
+
+		h3 {
+			margin: 0;
+			font-size: 19px;
+			line-height: 1.25;
+			letter-spacing: 0;
+		}
+
+		p {
+			margin: 0;
+		}
+
+		.hero-copy {
+			max-width: 710px;
+			color: #39443d;
+			font-size: clamp(17px, 2vw, 20px);
+		}
+
+		.hero-meta {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			margin-top: 26px;
+		}
+
+		.pill {
+			display: inline-flex;
+			align-items: center;
+			gap: 8px;
+			min-height: 34px;
+			padding: 7px 11px;
+			border: 1px solid var(--line);
+			background: rgba(255, 253, 247, 0.74);
+			border-radius: 8px;
+			color: #38443d;
+			font-size: 13px;
+			font-weight: 720;
+			white-space: nowrap;
+		}
+
+		.pill b {
+			color: var(--ink);
+		}
+
+		.snapshot {
+			position: relative;
+			padding: 22px;
+			background: rgba(255, 253, 247, 0.88);
+			border: 1px solid rgba(101, 82, 51, 0.16);
+			border-radius: 8px;
+			box-shadow: var(--shadow);
+		}
+
+		.snapshot-grid {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 12px;
+			margin-top: 18px;
+		}
+
+		.metric {
+			min-height: 124px;
+			padding: 16px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: #fffbf1;
+		}
+
+		.metric strong {
+			display: block;
+			color: var(--ink);
+			font-size: clamp(28px, 4vw, 48px);
+			line-height: 1;
+		}
+
+		.metric span {
+			display: block;
+			margin-top: 10px;
+			color: var(--muted);
+			font-size: 13px;
+			font-weight: 720;
+		}
+
+		.metric:nth-child(2) {
+			background: var(--green-soft);
+		}
+
+		.metric:nth-child(3) {
+			background: var(--blue-soft);
+		}
+
+		.metric:nth-child(4) {
+			background: var(--gold-soft);
+		}
+
+		.section {
+			padding: 74px 0;
+			border-top: 1px solid rgba(101, 82, 51, 0.14);
+		}
+
+		.section-head {
+			display: grid;
+			grid-template-columns: minmax(0, 0.86fr) minmax(300px, 0.54fr);
+			gap: 30px;
+			align-items: end;
+			margin-bottom: 28px;
+		}
+
+		.section-kicker {
+			color: var(--green);
+			font-size: 13px;
+			font-weight: 820;
+			text-transform: uppercase;
+		}
+
+		.section-note {
+			color: var(--muted);
+			font-size: 15px;
+		}
+
+		.arch-map {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 14px;
+		}
+
+		.layer {
+			position: relative;
+			min-height: 420px;
+			padding: 18px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--sheet);
+		}
+
+		.layer::after {
+			content: "";
+			position: absolute;
+			top: 48px;
+			right: -17px;
+			width: 30px;
+			height: 2px;
+			background: var(--line);
+		}
+
+		.layer:last-child::after {
+			display: none;
+		}
+
+		.layer-label {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 34px;
+			height: 34px;
+			margin-bottom: 14px;
+			border-radius: 8px;
+			background: var(--ink);
+			color: var(--sheet);
+			font-size: 13px;
+			font-weight: 820;
+		}
+
+		.layer p {
+			margin-top: 8px;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.module-list {
+			display: grid;
+			gap: 8px;
+			margin-top: 18px;
+		}
+
+		.module {
+			padding: 10px;
+			border: 1px solid rgba(101, 82, 51, 0.15);
+			border-radius: 8px;
+			background: rgba(247, 244, 236, 0.72);
+			color: #334039;
+			font-size: 13px;
+			font-weight: 740;
+		}
+
+		.module small {
+			display: block;
+			margin-top: 2px;
+			color: var(--muted);
+			font-size: 12px;
+			font-weight: 620;
+			overflow-wrap: anywhere;
+		}
+
+		.highlights {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 14px;
+		}
+
+		.highlight {
+			min-height: 248px;
+			padding: 18px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--sheet);
+		}
+
+		.highlight-mark {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 42px;
+			height: 42px;
+			margin-bottom: 18px;
+			border-radius: 8px;
+			font-weight: 880;
+		}
+
+		.highlight:nth-child(1) .highlight-mark { background: var(--green-soft); color: var(--green); }
+		.highlight:nth-child(2) .highlight-mark { background: var(--blue-soft); color: var(--blue); }
+		.highlight:nth-child(3) .highlight-mark { background: var(--gold-soft); color: var(--gold); }
+		.highlight:nth-child(4) .highlight-mark { background: var(--plum-soft); color: var(--plum); }
+
+		.highlight p {
+			margin-top: 10px;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.flywheel-wrap {
+			display: grid;
+			grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.1fr);
+			gap: 24px;
+			align-items: stretch;
+		}
+
+		.flywheel {
+			position: relative;
+			min-height: 470px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background:
+				radial-gradient(circle at center, rgba(62, 116, 88, 0.08) 0 34%, transparent 35%),
+				var(--sheet);
+			overflow: hidden;
+		}
+
+		.fly-center {
+			position: absolute;
+			inset: 50%;
+			width: 150px;
+			height: 150px;
+			margin: -75px 0 0 -75px;
+			display: grid;
+			place-items: center;
+			text-align: center;
+			padding: 18px;
+			border: 1px solid var(--line);
+			border-radius: 50%;
+			background: #fffbf1;
+			font-weight: 880;
+			line-height: 1.2;
+		}
+
+		.fly-step {
+			position: absolute;
+			width: 176px;
+			padding: 12px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: rgba(255, 253, 247, 0.94);
+			box-shadow: 0 10px 25px rgba(44, 35, 22, 0.08);
+		}
+
+		.fly-step b {
+			display: block;
+			font-size: 13px;
+		}
+
+		.fly-step span {
+			display: block;
+			margin-top: 5px;
+			color: var(--muted);
+			font-size: 12px;
+		}
+
+		.fly-step.s1 { top: 34px; left: calc(50% - 88px); border-color: rgba(62, 116, 88, 0.34); }
+		.fly-step.s2 { top: 156px; right: 26px; border-color: rgba(66, 111, 143, 0.34); }
+		.fly-step.s3 { bottom: 42px; right: 74px; border-color: rgba(189, 132, 55, 0.34); }
+		.fly-step.s4 { bottom: 42px; left: 74px; border-color: rgba(117, 91, 120, 0.34); }
+		.fly-step.s5 { top: 156px; left: 26px; border-color: rgba(184, 93, 76, 0.34); }
+
+		.fly-ring {
+			position: absolute;
+			inset: 78px;
+			border: 2px solid rgba(62, 116, 88, 0.18);
+			border-radius: 50%;
+		}
+
+		.fly-ring::after {
+			content: "";
+			position: absolute;
+			right: 55px;
+			top: 11px;
+			width: 18px;
+			height: 18px;
+			border-top: 3px solid var(--green);
+			border-right: 3px solid var(--green);
+			transform: rotate(38deg);
+		}
+
+		.path-list {
+			display: grid;
+			gap: 12px;
+		}
+
+		.path-item {
+			display: grid;
+			grid-template-columns: 44px minmax(0, 1fr);
+			gap: 14px;
+			min-height: 92px;
+			padding: 15px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--sheet);
+		}
+
+		.path-num {
+			display: grid;
+			place-items: center;
+			width: 44px;
+			height: 44px;
+			border-radius: 8px;
+			background: var(--ink);
+			color: var(--sheet);
+			font-weight: 840;
+		}
+
+		.path-item p {
+			margin-top: 6px;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.compare {
+			width: 100%;
+			border-collapse: collapse;
+			overflow: hidden;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--sheet);
+		}
+
+		.compare th,
+		.compare td {
+			padding: 16px;
+			border-bottom: 1px solid var(--line);
+			border-right: 1px solid var(--line);
+			text-align: left;
+			vertical-align: top;
+		}
+
+		.compare th {
+			background: #ece5d7;
+			color: #263129;
+			font-size: 13px;
+			text-transform: uppercase;
+		}
+
+		.compare tr:last-child td {
+			border-bottom: 0;
+		}
+
+		.compare th:last-child,
+		.compare td:last-child {
+			border-right: 0;
+		}
+
+		.compare td:first-child {
+			width: 158px;
+			color: var(--ink);
+			font-weight: 820;
+			background: rgba(247, 244, 236, 0.58);
+		}
+
+		.compare p {
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.badge {
+			display: inline-flex;
+			margin-bottom: 8px;
+			padding: 4px 8px;
+			border-radius: 8px;
+			font-size: 12px;
+			font-weight: 820;
+		}
+
+		.bg-green { background: var(--green-soft); color: var(--green); }
+		.bg-blue { background: var(--blue-soft); color: var(--blue); }
+		.bg-gold { background: var(--gold-soft); color: var(--gold); }
+		.bg-coral { background: var(--coral-soft); color: var(--coral); }
+
+		.strategy-grid {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 14px;
+		}
+
+		.strategy {
+			min-height: 306px;
+			padding: 20px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--sheet);
+		}
+
+		.strategy h3 {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+		}
+
+		.strategy h3::before {
+			content: "";
+			width: 14px;
+			height: 14px;
+			border-radius: 50%;
+			background: var(--green);
+		}
+
+		.strategy:nth-child(2) h3::before {
+			background: var(--blue);
+		}
+
+		.strategy:nth-child(3) h3::before {
+			background: var(--gold);
+		}
+
+		.strategy ul {
+			margin: 18px 0 0;
+			padding: 0;
+			list-style: none;
+			display: grid;
+			gap: 12px;
+		}
+
+		.strategy li {
+			position: relative;
+			padding-left: 18px;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.strategy li::before {
+			content: "";
+			position: absolute;
+			top: 9px;
+			left: 0;
+			width: 7px;
+			height: 7px;
+			border-radius: 50%;
+			background: var(--line);
+		}
+
+		.recommendation {
+			display: grid;
+			grid-template-columns: 0.92fr 1.08fr;
+			gap: 18px;
+			align-items: stretch;
+			padding: 22px;
+			border: 1px solid rgba(62, 116, 88, 0.22);
+			border-radius: 8px;
+			background: linear-gradient(135deg, rgba(227, 238, 231, 0.9), rgba(255, 253, 247, 0.92));
+		}
+
+		.stack {
+			display: grid;
+			gap: 10px;
+		}
+
+		.stack-row {
+			display: grid;
+			grid-template-columns: 128px minmax(0, 1fr);
+			gap: 10px;
+			align-items: center;
+			min-height: 48px;
+		}
+
+		.stack-key {
+			padding: 10px;
+			border-radius: 8px;
+			background: var(--ink);
+			color: var(--sheet);
+			font-size: 13px;
+			font-weight: 820;
+			text-align: center;
+		}
+
+		.stack-value {
+			padding: 12px;
+			border: 1px solid rgba(101, 82, 51, 0.18);
+			border-radius: 8px;
+			background: rgba(255, 253, 247, 0.72);
+			color: #38443d;
+			font-size: 14px;
+		}
+
+		.sources {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px;
+			margin-top: 22px;
+		}
+
+		.source-link {
+			display: inline-flex;
+			padding: 8px 10px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: rgba(255, 253, 247, 0.75);
+			color: var(--muted);
+			font-size: 13px;
+			font-weight: 720;
+		}
+
+		code {
+			padding: 1px 5px;
+			border: 1px solid rgba(101, 82, 51, 0.16);
+			border-radius: 6px;
+			background: rgba(255, 255, 255, 0.58);
+			color: #263129;
+			font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+			font-size: 0.92em;
+			overflow-wrap: anywhere;
+		}
+
+		@media (max-width: 980px) {
+			.hero,
+			.section-head,
+			.flywheel-wrap,
+			.recommendation {
+				grid-template-columns: 1fr;
+			}
+
+			.arch-map,
+			.highlights,
+			.strategy-grid {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+			}
+
+			.layer::after {
+				display: none;
+			}
+		}
+
+		@media (max-width: 680px) {
+			.page {
+				width: min(100% - 22px, 1180px);
+			}
+
+			.hero {
+				min-height: auto;
+				padding-top: 30px;
+			}
+
+			.snapshot-grid,
+			.arch-map,
+			.highlights,
+			.strategy-grid {
+				grid-template-columns: 1fr;
+			}
+
+			.section {
+				padding: 52px 0;
+			}
+
+			.flywheel {
+				min-height: 640px;
+			}
+
+			.fly-ring {
+				display: none;
+			}
+
+			.fly-center {
+				top: 34px;
+				left: 50%;
+				inset: auto auto auto 50%;
+			}
+
+			.fly-step {
+				position: relative;
+				top: auto;
+				right: auto;
+				bottom: auto;
+				left: auto;
+				width: calc(100% - 28px);
+				margin: 14px;
+			}
+
+			.fly-step.s1 {
+				margin-top: 210px;
+			}
+
+			.compare {
+				display: block;
+				overflow-x: auto;
+				white-space: normal;
+			}
+
+			.compare th,
+			.compare td {
+				min-width: 220px;
+			}
+
+			.stack-row {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<main class="page">
+		<section class="hero" aria-labelledby="hero-title">
+			<div>
+				<div class="eyebrow">基于当前工作区扫描 · 2026-06-08</div>
+				<h1 id="hero-title">Merchant Automation 架构雷达</h1>
+				<p class="hero-copy">这个项目的价值不在于“让 Agent 点网页”本身，而在于把自然语言、账号门店、执行 Recipe、安全门控、轨迹沉淀和 Dashboard 治理拆成了清晰边界。Agent 负责探索，Recipe 负责复用，Preflight 负责刹车。</p>
+				<div class="hero-meta" aria-label="项目关键标签">
+					<span class="pill"><b>核心架构</b> Operation + Recipe</span>
+					<span class="pill"><b>浏览器层</b> browser-use</span>
+					<span class="pill"><b>服务层</b> FastAPI + 飞书</span>
+					<span class="pill"><b>数据层</b> SQLite stores</span>
+				</div>
+			</div>
+			<aside class="snapshot" aria-label="项目快照">
+				<h2>结构快照</h2>
+				<p class="section-note">从文件和文档看，仓库已经形成了生产自动化所需的四个支点：规划、执行、治理、可观测。</p>
+				<div class="snapshot-grid">
+					<div class="metric">
+						<strong>38</strong>
+						<span>源码 Python 文件</span>
+					</div>
+					<div class="metric">
+						<strong>31</strong>
+						<span>测试文件覆盖核心流</span>
+					</div>
+					<div class="metric">
+						<strong>20</strong>
+						<span><code>operations/</code> 模块</span>
+					</div>
+					<div class="metric">
+						<strong>4</strong>
+						<span>主要入口：飞书、Dashboard、CLI、执行路由</span>
+					</div>
+				</div>
+			</aside>
+		</section>
+
+		<section class="section" aria-labelledby="map-title">
+			<div class="section-head">
+				<div>
+					<p class="section-kicker">Project map</p>
+					<h2 id="map-title">当前项目结构的优势</h2>
+				</div>
+				<p class="section-note">目录不是按页面或临时代码堆出来的，而是围绕“任务如何从一句话变成安全可回放的后台操作”来分层。这个分层让 Agent 失败时可降级，成功时可沉淀。</p>
+			</div>
+
+			<div class="arch-map">
+				<article class="layer">
+					<div class="layer-label">01</div>
+					<h3>输入与协作层</h3>
+					<p>把用户入口和后台执行解耦，飞书、Dashboard、CLI 都能复用同一套规划和执行链路。</p>
+					<div class="module-list">
+						<div class="module">飞书机器人 <small><code>feishu/bot.py</code></small></div>
+						<div class="module">Dashboard 路由 <small><code>dashboard/routes.py</code></small></div>
+						<div class="module">本地探索 CLI <small><code>explore.py</code></small></div>
+						<div class="module">服务入口 <small><code>server.py</code></small></div>
+					</div>
+				</article>
+
+				<article class="layer">
+					<div class="layer-label">02</div>
+					<h3>规划与绑定层</h3>
+					<p>自然语言先变成结构化任务，再绑定平台 Recipe 和 Preflight 结果，执行前就知道风险边界。</p>
+					<div class="module-list">
+						<div class="module">自然语言解析 <small><code>parser.py</code> / <code>llm_parser.py</code></small></div>
+						<div class="module">表格任务规划 <small><code>planner.py</code></small></div>
+						<div class="module">Operation 契约 <small><code>catalog.py</code></small></div>
+						<div class="module">Recipe 绑定 <small><code>binder.py</code></small></div>
+						<div class="module">提交前检查 <small><code>preflight.py</code></small></div>
+					</div>
+				</article>
+
+				<article class="layer">
+					<div class="layer-label">03</div>
+					<h3>执行与学习层</h3>
+					<p>优先确定性回放，失败或无 Recipe 时再走 Agent 探索，并把成功历史合成为新 Recipe。</p>
+					<div class="module-list">
+						<div class="module">统一路由 <small><code>router.py</code></small></div>
+						<div class="module">确定性执行 <small><code>executor.py</code></small></div>
+						<div class="module">Agent 探索 <small><code>explorer.py</code></small></div>
+						<div class="module">Recipe 合成 <small><code>synthesizer.py</code></small></div>
+						<div class="module">内置步骤定义 <small><code>recipe_definitions.py</code></small></div>
+					</div>
+				</article>
+
+				<article class="layer">
+					<div class="layer-label">04</div>
+					<h3>治理与观测层</h3>
+					<p>任务、账号、Recipe、轨迹、失败分析分别持久化，方便审核、追踪和灰度晋级。</p>
+					<div class="module-list">
+						<div class="module">RecipeStore <small><code>operations/recipe_store.py</code></small></div>
+						<div class="module">OperationStore <small><code>operations/storage.py</code></small></div>
+						<div class="module">TraceRecorder <small><code>operations/traces.py</code></small></div>
+						<div class="module">失败归因 <small><code>operations/failure.py</code></small></div>
+						<div class="module">账号与任务 <small><code>accounts/</code> / <code>tasks/</code></small></div>
+					</div>
+				</article>
+			</div>
+		</section>
+
+		<section class="section" aria-labelledby="highlights-title">
+			<div class="section-head">
+				<div>
+					<p class="section-kicker">Highlights</p>
+					<h2 id="highlights-title">四个最值得保留的亮点</h2>
+				</div>
+				<p class="section-note">这些亮点让项目从“能跑一次的自动化脚本”变成“可以运营、审计、逐步放权的自动化系统”。</p>
+			</div>
+
+			<div class="highlights">
+				<article class="highlight">
+					<div class="highlight-mark">A</div>
+					<h3>契约先行</h3>
+					<p><code>OperationContract</code> 定义参数、成功标准和禁止行为。Agent 不再凭感觉执行，而是在业务契约里行动。</p>
+				</article>
+				<article class="highlight">
+					<div class="highlight-mark">B</div>
+					<h3>分层执行</h3>
+					<p><code>ExecutionRouter</code> 把确定性 Recipe、Agent 兜底、无执行器失败分开。热路径快，冷路径能探索。</p>
+				</article>
+				<article class="highlight">
+					<div class="highlight-mark">C</div>
+					<h3>安全门控</h3>
+					<p><code>Preflight</code> 将 commit 变成受全局开关、账号门店权限、Recipe 状态和成功率约束的显式决策。</p>
+				</article>
+				<article class="highlight">
+					<div class="highlight-mark">D</div>
+					<h3>闭环沉淀</h3>
+					<p><code>synthesizer.py</code> 能把 browser-use 历史转成 Recipe 步骤，成功探索可以回流为后续确定性执行资产。</p>
+				</article>
+			</div>
+		</section>
+
+		<section class="section" aria-labelledby="flywheel-title">
+			<div class="section-head">
+				<div>
+					<p class="section-kicker">Recipe flywheel</p>
+					<h2 id="flywheel-title">为什么这个结构比直接让 Agent 操作更稳</h2>
+				</div>
+				<p class="section-note">Agent 的强项是探索未知页面；系统的强项是把成功经验变成可审、可控、可复用的执行路径。两者结合后，成本和不确定性都会向热路径收敛。</p>
+			</div>
+
+			<div class="flywheel-wrap">
+				<div class="flywheel" role="img" aria-label="Agent 探索到 Recipe 回放的闭环">
+					<div class="fly-ring"></div>
+					<div class="fly-center">Agent 探索<br>Recipe 回放</div>
+					<div class="fly-step s1"><b>自然语言任务</b><span>飞书或 CLI 进入规划服务</span></div>
+					<div class="fly-step s2"><b>无步骤时探索</b><span><code>AgentExplorer</code> 驱动浏览器</span></div>
+					<div class="fly-step s3"><b>成功后合成</b><span><code>AgentHistoryList</code> 到 <code>RecipeDefinition</code></span></div>
+					<div class="fly-step s4"><b>人工审核晋级</b><span>candidate 到 prepare_ready / commit_ready</span></div>
+					<div class="fly-step s5"><b>热路径回放</b><span><code>RecipeStepExecutor</code> 确定性执行</span></div>
+				</div>
+
+				<div class="path-list">
+					<div class="path-item">
+						<div class="path-num">1</div>
+						<div>
+							<h3>冷启动保留 Agent 弹性</h3>
+							<p>页面没见过、Recipe 不存在或步骤刚失效时，Agent 可以重新探索后台，不需要人工先手写完整脚本。</p>
+						</div>
+					</div>
+					<div class="path-item">
+						<div class="path-num">2</div>
+						<div>
+							<h3>成功历史变成结构化资产</h3>
+							<p>合成器只抽取 navigate、click、input、upload_file 等关键动作，并用语义 target 和参数模板替代临时 DOM index。</p>
+						</div>
+					</div>
+					<div class="path-item">
+						<div class="path-num">3</div>
+						<div>
+							<h3>审核与门控控制生产风险</h3>
+							<p>candidate 可以先在 prepare 中验证；只有状态、权限、成功率都满足时才允许真实 commit。</p>
+						</div>
+					</div>
+					<div class="path-item">
+						<div class="path-num">4</div>
+						<div>
+							<h3>失败能解释，也能回退</h3>
+							<p>Trace、FailureAnalyzer、Dashboard 和最近失败窗口让系统知道为什么失败，而不是只返回“Agent 没完成”。</p>
+						</div>
+					</div>
+				</div>
+			</div>
+		</section>
+
+		<section class="section" aria-labelledby="compare-title">
+			<div class="section-head">
+				<div>
+					<p class="section-kicker">Skills vs Playwright</p>
+					<h2 id="compare-title">Codex / Claude Code 用 Skills，和调用 Playwright 的区别</h2>
+				</div>
+				<p class="section-note">它们不是替代关系。Skills 更像 Agent 的“工作方法和领域手册”，Playwright 更像浏览器的“确定性执行器”。当前项目里的 Recipe 层，正好处在两者之间。</p>
+			</div>
+
+			<table class="compare" aria-label="Skills 与 Playwright 对比">
+				<thead>
+					<tr>
+						<th>维度</th>
+						<th>Codex / Claude Code Skills</th>
+						<th>直接调用 Playwright</th>
+						<th>当前项目的 Recipe / browser-use</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td>核心定位</td>
+						<td><span class="badge bg-green">方法层</span><p>把重复的工作流、检查清单、领域知识、脚本和参考资料包装给 Agent，帮助它更可靠地思考和执行。</p></td>
+						<td><span class="badge bg-blue">工具层</span><p>提供浏览器自动化 API，适合确定性点击、填写、断言、截图和端到端测试。</p></td>
+						<td><span class="badge bg-gold">业务执行层</span><p>用 Operation 契约和 Recipe 步骤表达商家后台操作，既能由 Agent 生成，也能被系统治理。</p></td>
+					</tr>
+					<tr>
+						<td>适合放什么</td>
+						<td><p>项目启动步骤、测试策略、PR 审核流程、Recipe 设计规范、飞书卡片文案规范、故障排查路径。</p></td>
+						<td><p>稳定页面的浏览器动作、可重复验收、视觉回归、表单流程、登录态验证、Dashboard UI 回归。</p></td>
+						<td><p>平台、门店、操作类型、参数模板、提交前停止点、Recipe 状态、成功率与失败轨迹。</p></td>
+					</tr>
+					<tr>
+						<td>最大优势</td>
+						<td><p>跨任务复用经验，让不同 Agent 更像同一个团队成员；长文档按需加载，不必每次塞进上下文。</p></td>
+						<td><p>执行结果可重复、可测试、可并入 CI；页面行为清晰时，比自由探索便宜且稳定。</p></td>
+						<td><p>把探索成功转为生产资产，并用 candidate、prepare_ready、commit_ready 逐级放权。</p></td>
+					</tr>
+					<tr>
+						<td>主要边界</td>
+						<td><p>Skills 本身不等于浏览器控制能力。它能告诉 Agent 怎么做，但仍需要 shell、MCP、browser-use、Playwright 等工具落地。</p></td>
+						<td><p>Playwright 不理解业务意图。页面结构变动、语义含糊、跨平台后台差异，需要上层 Agent 或 Recipe 适配。</p></td>
+						<td><p>Recipe 合成质量取决于 Agent 历史质量；语义 target 跨后台变化仍需降级探索和人工审核兜底。</p></td>
+					</tr>
+					<tr>
+						<td>在本项目中的建议</td>
+						<td><p>沉淀为 repo 级 Skills：如何新增 Operation、如何审核 Recipe、如何处理真实后台失败、如何跑灰度。</p></td>
+						<td><p>用于 Dashboard 回归、Recipe 本地测试页面、登录流程验收和关键路径截图，不建议直接取代 Recipe 治理层。</p></td>
+						<td><p>继续让生产后台操作走 Operation + Recipe + Preflight；Agent 和 Playwright 都作为生成、验证、调试的辅助能力。</p></td>
+					</tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section class="section" aria-labelledby="strategy-title">
+			<div class="section-head">
+				<div>
+					<p class="section-kicker">Positioning</p>
+					<h2 id="strategy-title">三类能力的最佳落位</h2>
+				</div>
+				<p class="section-note">把能力放到正确层级，项目就不会退化成一堆浏览器脚本，也不会把生产执行完全交给不可解释的自由 Agent。</p>
+			</div>
+
+			<div class="strategy-grid">
+				<article class="strategy">
+					<h3>Skills：让 Agent 会做事</h3>
+					<ul>
+						<li>写在 <code>.agents/skills</code> 或对应工具的技能目录里，适合团队规范和长流程。</li>
+						<li>把“新增一个商家后台操作”做成固定流程：定义契约、补 Recipe、加测试、验 Dashboard。</li>
+						<li>把线上故障处理做成技能：先读 trace，再判定 preflight、Recipe 过期、选择器失效或账号问题。</li>
+					</ul>
+				</article>
+
+				<article class="strategy">
+					<h3>Playwright：让浏览器可验证</h3>
+					<ul>
+						<li>适合稳定、可断言、可截图的场景，比如 Dashboard 和本地测试后台。</li>
+						<li>可作为 CI 里的 UI 回归工具，验证页面是否渲染、按钮是否可点、流程是否走通。</li>
+						<li>用于辅助验证 Recipe，而不是把业务状态机藏进脚本里。</li>
+					</ul>
+				</article>
+
+				<article class="strategy">
+					<h3>Recipe：让自动化可运营</h3>
+					<ul>
+						<li>Recipe 是项目的生产资产，承载参数模板、提交前停止点和晋级状态。</li>
+						<li>Agent 成功探索后自动合成 candidate，后续由 Dashboard 审核和 Preflight 放权。</li>
+						<li>失败时回退 Agent 探索，并把新经验沉淀回来，形成可观测飞轮。</li>
+					</ul>
+				</article>
+			</div>
+		</section>
+
+		<section class="section" aria-labelledby="recommend-title">
+			<div class="recommendation">
+				<div>
+					<p class="section-kicker">Recommended architecture</p>
+					<h2 id="recommend-title">推荐组合：Skills 管方法，Recipe 管业务，Playwright 管验证</h2>
+					<p class="section-note">这套项目结构已经接近这个方向。下一步最有价值的不是把所有东西改成 Playwright，而是把可复用经验沉淀到 Skill 和 Recipe 两个层级：前者服务开发 Agent，后者服务生产执行。</p>
+				</div>
+				<div class="stack" aria-label="推荐分层">
+					<div class="stack-row">
+						<div class="stack-key">Agent Skills</div>
+						<div class="stack-value">编码流程、故障诊断、Recipe 审核、测试与发布规范</div>
+					</div>
+					<div class="stack-row">
+						<div class="stack-key">Operation</div>
+						<div class="stack-value">业务意图、参数 schema、成功标准、禁止行为</div>
+					</div>
+					<div class="stack-row">
+						<div class="stack-key">Recipe</div>
+						<div class="stack-value">可回放步骤、状态机、成功率、人工晋级</div>
+					</div>
+					<div class="stack-row">
+						<div class="stack-key">browser-use</div>
+						<div class="stack-value">未知页面探索、语义定位、动作历史输出</div>
+					</div>
+					<div class="stack-row">
+						<div class="stack-key">Playwright</div>
+						<div class="stack-value">本地页面验收、Dashboard 回归、截图和浏览器断言</div>
+					</div>
+				</div>
+			</div>
+
+			<div class="sources" aria-label="参考资料">
+				<a class="source-link" href="https://developers.openai.com/codex/skills">OpenAI Codex Agent Skills</a>
+				<a class="source-link" href="https://developers.openai.com/codex/explore/">OpenAI Codex use cases</a>
+				<a class="source-link" href="https://docs.claude.com/en/docs/claude-code/skills">Claude Code Skills</a>
+				<a class="source-link" href="https://docs.claude.com/en/docs/claude-code/mcp">Claude Code MCP</a>
+				<a class="source-link" href="https://playwright.dev/docs/intro">Playwright Docs</a>
+				<a class="source-link" href="./PRD-recipe-flywheel.md">本项目 PRD</a>
+				<a class="source-link" href="./PLAN-recipe-flywheel.md">本项目 PLAN</a>
+			</div>
+		</section>
+	</main>
+</body>
+</html>

@@ -162,9 +162,9 @@ class RecipeRegistry:
 					operation_id='update_store_decoration_image',
 					platform='meituan',
 					version=1,
-					status=RecipeStatus.PREPARE_TESTING,
-					allowed_modes={ExecutionMode.PARSE_ONLY, ExecutionMode.DRY_RUN, ExecutionMode.PREPARE},
-					success_rates={ExecutionMode.PREPARE: 0.75},
+					status=RecipeStatus.COMMIT_READY,
+					allowed_modes={ExecutionMode.PARSE_ONLY, ExecutionMode.DRY_RUN, ExecutionMode.PREPARE, ExecutionMode.COMMIT},
+					success_rates={ExecutionMode.PREPARE: 0.75, ExecutionMode.COMMIT: 0.95},
 				),
 				RecipeMetadata(
 					recipe_id='meituan.update_store_banner.v1',
@@ -374,4 +374,3 @@ class RecipeRegistry:
 		if not matches:
 			raise RecipeLookupError(f'No recipe for {platform}/{operation_id}')
 		return max(matches, key=lambda recipe: recipe.version)
-
