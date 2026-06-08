@@ -13,7 +13,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 
 from merchant_automation.accounts.manager import AccountManager
-from merchant_automation.accounts.models import AccountStatus
+from merchant_automation.accounts.models import Account, AccountStatus, LoginStatus, PlatformAccount
+from merchant_automation.accounts.store import AccountStore
 from merchant_automation.config import Settings, get_config
 from merchant_automation.feishu.bot import FeishuBot
 from merchant_automation.feishu.client import get_feishu_client
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 LOGIN_WAIT_TIMEOUT_SECONDS = 15 * 60
 LOGIN_CHECK_POLL_SECONDS = 3
 LOGIN_PAGE_TEXT_LIMIT = 3000
+LOGIN_BROWSER_START_TIMEOUT_SECONDS = 60
 
 LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 	'meituan': {
@@ -65,6 +67,18 @@ LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 	},
 }
 
+
+def _ensure_login_browser_start_timeout() -> None:
+	"""Give the visible manual-login browser enough time to launch on slow machines."""
+	for env_var in ('TIMEOUT_BrowserStartEvent', 'TIMEOUT_BrowserLaunchEvent'):
+		raw_value = os.environ.get(env_var)
+		try:
+			current_value = float(raw_value) if raw_value else 0
+		except ValueError:
+			current_value = 0
+		if current_value < LOGIN_BROWSER_START_TIMEOUT_SECONDS:
+			os.environ[env_var] = f'{LOGIN_BROWSER_START_TIMEOUT_SECONDS:g}'
+
 # ---------------------------------------------------------------------------
 # Globals — initialized in lifespan
 # ---------------------------------------------------------------------------
@@ -72,6 +86,7 @@ LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 _config: Settings = None  # type: ignore[assignment]
 _task_queue: TaskQueue = None  # type: ignore[assignment]
 _account_manager: AccountManager = None  # type: ignore[assignment]
+_account_store: AccountStore | None = None
 _feishu_bot: FeishuBot = None  # type: ignore[assignment]
 _resource_downloader: FeishuResourceDownloader = None  # type: ignore[assignment]
 _planning_service: OperationPlanningService = None  # type: ignore[assignment]
@@ -288,7 +303,7 @@ class MerchantTaskExecutor:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-	global _config, _task_queue, _account_manager, _feishu_bot, _resource_downloader
+	global _config, _task_queue, _account_manager, _account_store, _feishu_bot, _resource_downloader
 	global _planning_service, _operation_store, _recipe_store, _pool
 
 	_config = get_config()
@@ -314,8 +329,13 @@ async def lifespan(app: FastAPI):
 	)
 	await _account_manager.start()
 
+	_account_store = AccountStore(db_dir / 'account.db')
+	_account_store.initialize()
+	await _sync_existing_login_accounts()
+
 	# Initialize merchant_automation components
-	_planning_service = OperationPlanningService()
+	llm = _create_llm()
+	_planning_service = OperationPlanningService(llm=llm)
 
 	_operation_store = OperationStore(db_dir / 'merchant.db')
 	_operation_store.initialize()
@@ -327,6 +347,11 @@ async def lifespan(app: FastAPI):
 	from merchant_automation.operations.recipes import RecipeRegistry
 	for recipe in RecipeRegistry.default().recipes:
 		_recipe_store.upsert_recipe(recipe)
+
+	# Seed default recipe definitions
+	from merchant_automation.operations.recipe_definitions import RECIPE_DEFINITIONS
+	for definition in RECIPE_DEFINITIONS.values():
+		_recipe_store.save_definition(definition, source='default')
 
 	# Initialize executor + pool
 	executor = MerchantTaskExecutor(
@@ -873,9 +898,10 @@ async def _handle_login_command(text: str, user_id: str, chat_id: str, message_i
 	accounts = [account for account in accounts if account.platform == platform]
 	if accounts:
 		account = accounts[0]
-		await _account_manager.update_status(account.id, AccountStatus.NEEDS_LOGIN)
+		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 	else:
 		account = await _account_manager.create_account(name=store_name, platform=platform)
+		_sync_account_store(account, AccountStatus.NEEDS_LOGIN)
 
 	await _feishu_bot.reply_text(
 		message_id,
@@ -902,10 +928,12 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 	session: BrowserSession | None = None
 	should_close_session = False
 	try:
+		_ensure_login_browser_start_timeout()
 		profile = BrowserProfile(
 			headless=False,
 			user_data_dir=account.profile_dir,
 			window_size={'width': 1280, 'height': 900},
+			enable_default_extensions=False,
 		)
 		session = BrowserSession(browser_profile=profile)
 		await session.start()
@@ -926,10 +954,10 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 
 		if login_success:
 			should_close_session = True
-			await _account_manager.update_status(account_id, AccountStatus.ACTIVE)
+			await _update_login_account_status(account, AccountStatus.ACTIVE)
 			await _feishu_bot.send_text(chat_id, f'✅ {account.name} 登录成功，登录态已保存。')
 		else:
-			await _account_manager.update_status(account_id, AccountStatus.NEEDS_LOGIN)
+			await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 			await _feishu_bot.send_text(
 				chat_id,
 				f'⚠️ {account.name} 暂未检测到登录成功，浏览器窗口已保留。\n'
@@ -938,7 +966,7 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 
 	except Exception as e:
 		logger.exception('Login flow failed')
-		await _account_manager.update_status(account_id, AccountStatus.NEEDS_LOGIN)
+		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 		await _feishu_bot.send_text(chat_id, f'❌ 登录失败: {str(e)[:100]}')
 	finally:
 		if session is not None and should_close_session:
@@ -1019,6 +1047,42 @@ def _login_url_for_platform(platform: str) -> str:
 	return login_urls.get(platform, 'https://e.waimai.meituan.com/')
 
 
+async def _update_login_account_status(account: Account, status: AccountStatus) -> None:
+	await _account_manager.update_status(account.id, status)
+	_sync_account_store(account, status)
+
+
+async def _sync_existing_login_accounts() -> None:
+	if _account_store is None:
+		return
+
+	for account in await _account_manager.get_all_accounts():
+		_sync_account_store(account, account.status)
+
+
+def _sync_account_store(account: Account, status: AccountStatus) -> None:
+	if _account_store is None:
+		return
+
+	_account_store.upsert_account(
+		PlatformAccount(
+			account_id=account.id,
+			platform=account.platform,
+			username=getattr(account, 'username', None) or account.name,
+			profile_path=account.profile_dir,
+			login_status=_to_login_status(status),
+		)
+	)
+
+
+def _to_login_status(status: AccountStatus) -> LoginStatus:
+	if status == AccountStatus.ACTIVE:
+		return LoginStatus.LOGGED_IN
+	if status == AccountStatus.NEEDS_LOGIN:
+		return LoginStatus.EXPIRED
+	return LoginStatus.UNKNOWN
+
+
 def _create_llm():
 	from browser_use.llm.openai.chat import ChatOpenAI
 
@@ -1035,12 +1099,13 @@ def _create_llm():
 
 def _mount_dashboard():
 	"""Mount the merchant_automation dashboard routes."""
-	from merchant_automation.accounts.store import AccountStore
 	from merchant_automation.dashboard.routes import create_dashboard_router
 
 	db_dir = Path(_config.TASK_DB_PATH).parent if _config else Path('.')
-	account_store = AccountStore(db_dir / 'account.db')
-	account_store.initialize()
+	account_store = _account_store
+	if account_store is None:
+		account_store = AccountStore(db_dir / 'account.db')
+		account_store.initialize()
 
 	router = create_dashboard_router(
 		_operation_store,
@@ -1078,5 +1143,3 @@ if __name__ == '__main__':
 
 	port = int(os.environ.get('PORT', get_config().SERVER_PORT))
 	uvicorn.run('merchant_automation.server:app', host='0.0.0.0', port=port, reload=False)
-
-

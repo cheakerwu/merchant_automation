@@ -6,10 +6,8 @@ import logging
 import re
 import tempfile
 
-from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage
-
 from browser_use.browser.session import BrowserSession
+from browser_use.llm.messages import UserMessage
 from merchant_automation.operations.recipe_definition import (
 	RecipeDefinition,
 	RecipeStep,
@@ -36,7 +34,7 @@ class RecipeStepExecutor:
 	def __init__(
 		self,
 		browser_session: BrowserSession,
-		llm: BaseChatModel | None = None,
+		llm=None,
 	) -> None:
 		self._session = browser_session
 		self._llm = llm
@@ -320,8 +318,8 @@ class RecipeStepExecutor:
 		)
 		prompt += '\n'.join(candidates[:50])
 
-		response = await self._llm.ainvoke([HumanMessage(content=prompt)])
-		match = re.search(r'\d+', str(response.content))
+		response = await self._llm.ainvoke([UserMessage(content=prompt)])
+		match = re.search(r'\d+', str(response.completion))
 		if match:
 			index = int(match.group())
 			element = await self._session.get_element_by_index(index)

@@ -22,14 +22,14 @@ from merchant_automation.tasks.models import Attachment, Task, TaskMetrics, Task
 
 # Status -> (display label, header color)
 _STATUS_DISPLAY: dict[str, tuple[str, str]] = {
-	TaskStatus.PENDING.value: ("Pending", "grey"),
-	TaskStatus.PARSING.value: ("Parsing", "blue"),
-	TaskStatus.PREPARING.value: ("Preparing", "blue"),
-	TaskStatus.EXECUTING.value: ("Running", "blue"),
-	TaskStatus.AWAITING_APPROVAL.value: ("Approval Needed", "orange"),
-	TaskStatus.COMPLETED.value: ("Completed", "green"),
-	TaskStatus.FAILED.value: ("Failed", "red"),
-	TaskStatus.CANCELLED.value: ("Cancelled", "grey"),
+	TaskStatus.PENDING.value: ("等待中", "grey"),
+	TaskStatus.PARSING.value: ("解析中", "blue"),
+	TaskStatus.PREPARING.value: ("准备中", "blue"),
+	TaskStatus.EXECUTING.value: ("执行中", "blue"),
+	TaskStatus.AWAITING_APPROVAL.value: ("等待确认", "orange"),
+	TaskStatus.COMPLETED.value: ("已完成", "green"),
+	TaskStatus.FAILED.value: ("失败", "red"),
+	TaskStatus.CANCELLED.value: ("已取消", "grey"),
 }
 
 
@@ -216,9 +216,9 @@ class FeishuBot:
 			)
 
 	def build_task_card(self, task: Task) -> dict:
-		"""Build an interactive card displaying task status with color coding."""
+		"""Build an interactive card displaying user-facing task status."""
 		label, color = _STATUS_DISPLAY.get(
-			task.status.value, ("Unknown", "grey")
+			task.status.value, ("未知", "grey")
 		)
 
 		created_at_str = task.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -233,7 +233,7 @@ class FeishuBot:
 		card: dict = {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": f"任务 [{task.id[:8]}]"},
+				"title": {"tag": "plain_text", "content": f"任务 {task.id[:8]} · {label}"},
 				"template": color,
 			},
 			"elements": [],
@@ -241,7 +241,6 @@ class FeishuBot:
 
 		elements: list[dict] = card["elements"]
 
-		# Task info fields
 		fields: list[dict] = [
 			{
 				"is_short": True,
@@ -259,71 +258,72 @@ class FeishuBot:
 				"is_short": True,
 				"text": {"tag": "lark_md", "content": f"**创建时间:**\n{created_at_str}"},
 			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**意图:**\n{task.intent or '未分类'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**目标:**\n{task.intent_target or '-'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**置信度:**\n{task.intent_confidence if task.intent_confidence is not None else '-'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**策略:**\n{task.policy_status or '未检查'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**Prompt:**\n{task.prompt_version or '-'}"},
-			},
 		]
+		if task.intent:
+			fields.append(
+				{
+					"is_short": True,
+					"text": {"tag": "lark_md", "content": f"**操作:**\n{task.intent}"},
+				}
+			)
+		if task.intent_target:
+			fields.append(
+				{
+					"is_short": True,
+					"text": {"tag": "lark_md", "content": f"**目标:**\n{task.intent_target}"},
+				}
+			)
+		if task.policy_status:
+			fields.append(
+				{
+					"is_short": True,
+					"text": {"tag": "lark_md", "content": f"**安全检查:**\n{task.policy_status}"},
+				}
+			)
 		elements.append({"tag": "div", "fields": fields})
 
-		# Instruction block
+		instruction_lines = ["**指令:**", task.instruction]
+		if task.raw_text and task.raw_text != task.instruction:
+			instruction_lines.extend(["", f"**来源输入:**\n{task.raw_text}"])
+		if task.policy_reason:
+			instruction_lines.extend(["", f"**安全说明:**\n{task.policy_reason}"])
+
 		elements.append({"tag": "hr"})
 		elements.append(
 			{
 				"tag": "div",
 				"text": {
 					"tag": "lark_md",
-					"content": (
-						f"**指令:**\n{task.instruction}\n\n"
-						f"**原始输入:**\n{task.raw_text or task.instruction}\n\n"
-						f"**策略原因:**\n{task.policy_reason or '-'}"
-					),
+					"content": "\n".join(instruction_lines),
 				},
 			}
 		)
 
-		# Result / error block (if present)
 		if task.result is not None:
 			elements.append({"tag": "hr"})
-			result_icon = "✅" if task.result.success else "❌"
+			result_label = "成功" if task.result.success else "失败"
 			elements.append(
 				{
 					"tag": "div",
 					"text": {
 						"tag": "lark_md",
-						"content": f"**Result:** {result_icon} {task.result.message}",
+						"content": f"**执行结果:**\n{result_label}: {task.result.message}",
 					},
 				}
 			)
 		elif task.error is not None:
 			elements.append({"tag": "hr"})
+			failure_reason = task.error_message_user or task.error
 			elements.append(
 				{
 					"tag": "div",
 					"text": {
 						"tag": "lark_md",
-						"content": f"**Error:**\n{task.error}",
+						"content": f"**失败原因:**\n{failure_reason}",
 					},
 				}
 			)
 
-		# Action buttons based on current status
 		elements.append({"tag": "hr"})
 		actions: list[dict] = []
 
@@ -635,4 +635,3 @@ class FeishuBot:
 		})
 
 		return card
-

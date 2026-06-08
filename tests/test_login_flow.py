@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 
 import pytest
 
 from merchant_automation import server
+from merchant_automation.accounts.models import AccountStatus, LoginStatus
 
 
 @dataclass
@@ -15,6 +17,7 @@ class FakeAccount:
 	name: str
 	platform: str
 	profile_dir: str = '/tmp/profile'
+	status: AccountStatus = AccountStatus.NEEDS_LOGIN
 
 
 class FakeFeishuBot:
@@ -53,11 +56,69 @@ class FakeAccountManager:
 				return account
 		return None
 
+	async def get_all_accounts(self) -> list[FakeAccount]:
+		return self.existing
+
+
+class FakeAccountStore:
+	def __init__(self) -> None:
+		self.upserted: list[object] = []
+
+	def upsert_account(self, account: object) -> None:
+		self.upserted.append(account)
+
+
+def test_login_browser_start_timeout_defaults_to_sixty(monkeypatch):
+	monkeypatch.delenv('TIMEOUT_BrowserStartEvent', raising=False)
+	monkeypatch.delenv('TIMEOUT_BrowserLaunchEvent', raising=False)
+
+	server._ensure_login_browser_start_timeout()
+
+	assert os.environ['TIMEOUT_BrowserStartEvent'] == '60'
+	assert os.environ['TIMEOUT_BrowserLaunchEvent'] == '60'
+
+
+def test_login_browser_start_timeout_keeps_larger_existing_value(monkeypatch):
+	monkeypatch.setenv('TIMEOUT_BrowserStartEvent', '90')
+	monkeypatch.setenv('TIMEOUT_BrowserLaunchEvent', '120')
+
+	server._ensure_login_browser_start_timeout()
+
+	assert os.environ['TIMEOUT_BrowserStartEvent'] == '90'
+	assert os.environ['TIMEOUT_BrowserLaunchEvent'] == '120'
+
+
+@pytest.mark.asyncio
+async def test_existing_login_accounts_are_backfilled_to_account_store(monkeypatch):
+	account = FakeAccount(
+		id='acct-1',
+		name='江湖饭焗',
+		platform='meituan',
+		profile_dir='/tmp/profile',
+		status=AccountStatus.ACTIVE,
+	)
+	account_manager = FakeAccountManager(existing=[account])
+	account_store = FakeAccountStore()
+
+	monkeypatch.setattr(server, '_account_manager', account_manager)
+	monkeypatch.setattr(server, '_account_store', account_store)
+
+	await server._sync_existing_login_accounts()
+
+	assert len(account_store.upserted) == 1
+	synced = account_store.upserted[0]
+	assert synced.account_id == 'acct-1'
+	assert synced.platform == 'meituan'
+	assert synced.username == '江湖饭焗'
+	assert synced.profile_path == '/tmp/profile'
+	assert synced.login_status == LoginStatus.LOGGED_IN
+
 
 @pytest.mark.asyncio
 async def test_login_command_creates_account_and_starts_headful_login(monkeypatch):
 	bot = FakeFeishuBot()
 	account_manager = FakeAccountManager()
+	account_store = FakeAccountStore()
 	started: list[tuple[str, str]] = []
 
 	async def fake_login_flow(account_id: str, chat_id: str) -> None:
@@ -65,6 +126,7 @@ async def test_login_command_creates_account_and_starts_headful_login(monkeypatc
 
 	monkeypatch.setattr(server, '_feishu_bot', bot)
 	monkeypatch.setattr(server, '_account_manager', account_manager)
+	monkeypatch.setattr(server, '_account_store', account_store)
 	monkeypatch.setattr(server, '_execute_login_flow', fake_login_flow)
 
 	handled = await server._handle_login_command(
@@ -80,6 +142,13 @@ async def test_login_command_creates_account_and_starts_headful_login(monkeypatc
 	assert started == [('acct-created', 'chat-1')]
 	assert bot.replies[0][0] == 'msg-1'
 	assert '正在打开浏览器登录 meituan/江湖饭焗' in bot.replies[0][1]
+	assert len(account_store.upserted) == 1
+	synced = account_store.upserted[0]
+	assert synced.account_id == 'acct-created'
+	assert synced.platform == 'meituan'
+	assert synced.username == '江湖饭焗'
+	assert synced.profile_path == '/tmp/profile'
+	assert synced.login_status == LoginStatus.EXPIRED
 
 
 @pytest.mark.asyncio
@@ -186,6 +255,7 @@ async def test_login_flow_waits_for_success_before_closing(monkeypatch):
 	bot = FakeFeishuBot()
 	account = FakeAccount(id='acct-1', name='江湖饭焗', platform='meituan')
 	account_manager = FakeAccountManager(existing=[account])
+	account_store = FakeAccountStore()
 	created_sessions: list[object] = []
 
 	class FakePage:
@@ -237,6 +307,7 @@ async def test_login_flow_waits_for_success_before_closing(monkeypatch):
 
 	monkeypatch.setattr(server, '_feishu_bot', bot)
 	monkeypatch.setattr(server, '_account_manager', account_manager)
+	monkeypatch.setattr(server, '_account_store', account_store)
 	monkeypatch.setattr(server, 'LOGIN_WAIT_TIMEOUT_SECONDS', 1, raising=False)
 	monkeypatch.setattr(server, 'LOGIN_CHECK_POLL_SECONDS', 0, raising=False)
 	monkeypatch.setattr('browser_use.Agent', ForbiddenAgent)
@@ -248,8 +319,15 @@ async def test_login_flow_waits_for_success_before_closing(monkeypatch):
 	assert created_sessions
 	session = created_sessions[0]
 	assert session.started is True
+	assert session.browser_profile.headless is False
+	assert session.browser_profile.enable_default_extensions is False
+	assert session.browser_profile.user_data_dir == '/tmp/profile'
 	assert session.navigated_to == ['https://e.waimai.meituan.com/']
 	assert session.closed is True
 	assert account_manager.updated[-1][0] == 'acct-1'
 	assert str(account_manager.updated[-1][1]) == 'AccountStatus.ACTIVE'
 	assert bot.sent[-1] == ('chat-1', '✅ 江湖饭焗 登录成功，登录态已保存。')
+	assert account_store.upserted
+	synced = account_store.upserted[-1]
+	assert synced.account_id == 'acct-1'
+	assert synced.login_status == LoginStatus.LOGGED_IN
