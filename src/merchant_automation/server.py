@@ -889,29 +889,9 @@ def _normalize_command_text(text: str) -> str:
 
 
 def _classify_special_command(text: str) -> str | None:
-	raw = text.strip().lower()
-	compact = _normalize_command_text(text)
-	if raw in ('?', '？') or compact in ('help', '帮助'):
-		return 'help'
-	if any(keyword in compact for keyword in ('帮助', '怎么用', '如何使用', '使用说明', '指令说明')):
-		return 'help'
-	if compact in ('状态', '任务', 'tasks') or any(keyword in compact for keyword in ('任务状态', '任务进度', '排队', '运行中')):
-		return 'status'
-	if compact in ('历史', 'history') or any(keyword in compact for keyword in ('历史记录', '最近记录', '执行记录')):
-		return 'history'
-	if compact in ('账号', '账户', 'accounts') or any(
-		keyword in compact
-		for keyword in ('账号列表', '账户列表', '我的账号', '我的账户', '登录状态', '账号状态', '账户状态')
-	):
-		return 'accounts'
-	if compact in ('附件', '附件列表', 'attachments') or any(
-		keyword in compact
-		for keyword in ('最近附件', '最近图片', '图片列表', '文件列表', '上传内容')
-	):
-		return 'attachments'
-	if _is_store_management_command(compact):
-		return 'stores'
-	return None
+	from merchant_automation.feishu.commands import classify_feishu_command
+	command = classify_feishu_command(text)
+	return command.value if command else None
 
 
 def _is_store_management_command(compact: str) -> bool:

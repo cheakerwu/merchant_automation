@@ -41,6 +41,8 @@ class FeishuBot:
 
 	async def send_text(self, chat_id: str, content: str) -> None:
 		"""Send a plain text message to a chat."""
+		from merchant_automation.feishu.presenter import sanitize_user_message
+		content = sanitize_user_message(content)
 		body = (
 			CreateMessageRequestBody.builder()
 			.receive_id(chat_id)
@@ -83,6 +85,8 @@ class FeishuBot:
 
 	async def reply_text(self, message_id: str, content: str) -> None:
 		"""Reply to a specific message with plain text."""
+		from merchant_automation.feishu.presenter import sanitize_user_message
+		content = sanitize_user_message(content)
 		body = (
 			ReplyMessageRequestBody.builder()
 			.msg_type("text")
