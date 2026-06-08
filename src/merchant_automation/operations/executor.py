@@ -319,7 +319,7 @@ class RecipeStepExecutor:
 		prompt += '\n'.join(candidates[:50])
 
 		response = await self._llm.ainvoke([UserMessage(content=prompt)])
-		match = re.search(r'\d+', str(response.completion))
+		match = re.search(r'\d+', _llm_response_text(response))
 		if match:
 			index = int(match.group())
 			element = await self._session.get_element_by_index(index)
@@ -378,3 +378,10 @@ class RecipeStepExecutor:
 			result = result.replace(f'{{{key}}}', str(value))
 		return result
 
+
+def _llm_response_text(response: object) -> str:
+	for attr in ('completion', 'content', 'text'):
+		value = getattr(response, attr, None)
+		if value is not None:
+			return str(value)
+	return str(response)

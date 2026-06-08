@@ -25,7 +25,7 @@ def test_plan_text_returns_parse_issue_without_raising():
 	assert result.plan.tasks == []
 	assert result.bound_tasks == []
 	assert len(result.input_issues) == 1
-	assert result.input_issues[0].reason == 'Unsupported operation: change_product_price'
+	assert result.input_issues[0].reason == 'Unsupported operation text: 把美团 A店 牛肉饭价格改成 19.9'
 
 
 def test_plan_table_rows_preserves_plan_and_binding_issues():

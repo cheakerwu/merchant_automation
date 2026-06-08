@@ -413,7 +413,7 @@ class FeishuBot:
 		return {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": "使用指南"},
+				"title": {"tag": "plain_text", "content": "商家后台助手"},
 				"template": "blue",
 			},
 			"elements": [
@@ -423,9 +423,9 @@ class FeishuBot:
 						"tag": "lark_md",
 						"content": (
 							"**创建任务**\n"
-							"- 打开美团江湖饭焗\n"
-							"- 美团江湖饭焗 搜索咖啡\n"
-							"- 江湖饭焗 美团 把咖啡价格改成25"
+							"- 美团江湖饭焗修改商家电话为13888888888\n"
+							"- 把美团 江湖饭焗 营业时间改为 09:00-22:00\n"
+							"- 把美团 江湖饭焗 门店照片换成刚上传的图片"
 						),
 					},
 				},
@@ -438,8 +438,8 @@ class FeishuBot:
 							"**账号与状态**\n"
 							"- 登录 美团 江湖饭焗\n"
 							"- 账号列表\n"
-							"- 状态 / 历史 / 指标\n"
-							"- 详情 <任务ID> / 日志 <任务ID>"
+							"- 状态 / 历史\n"
+							"- 门店列表 / 附件"
 						),
 					},
 				},
@@ -450,8 +450,8 @@ class FeishuBot:
 						"tag": "lark_md",
 						"content": (
 							"**图片和表格**\n"
-							"可以先发送图片或表格，系统会记录附件元数据。当前版本暂不直接执行图片/表格修改，"
-							"发送 `附件` 可查看最近上传内容。"
+							"可以先发送图片，系统会记录最近上传内容。发送 `附件` 可查看，"
+							"再发送门店照片替换任务即可使用最近图片。"
 						),
 					},
 				},
@@ -531,10 +531,16 @@ class FeishuBot:
 			AccountStatus.NEEDS_LOGIN.value: "🟡",
 			AccountStatus.DISABLED.value: "🔴",
 		}
+		_STATUS_LABEL = {
+			AccountStatus.ACTIVE.value: "已登录",
+			AccountStatus.NEEDS_LOGIN.value: "需要登录",
+			AccountStatus.DISABLED.value: "已停用",
+		}
 
 		_PLATFORM_NAME = {
 			"meituan": "美团",
 			"douyin": "抖音",
+			"eleme": "饿了么",
 			"taobao": "淘宝",
 		}
 
@@ -553,14 +559,14 @@ class FeishuBot:
 				"tag": "div",
 				"text": {
 					"tag": "lark_md",
-					"content": "暂无已配置的账号。\n点击下方按钮添加。",
+					"content": "暂无已配置的账号。\n发送“登录 <平台> <店铺名>”即可添加。",
 				},
 			})
 		else:
 			for account in accounts:
 				icon = _STATUS_ICON.get(account.status.value, "⚪")
 				platform_display = _PLATFORM_NAME.get(account.platform, account.platform)
-				status_text = account.status.value
+				status_text = _STATUS_LABEL.get(account.status.value, account.status.value)
 
 				# Last used time
 				if account.last_used_at:
@@ -597,16 +603,6 @@ class FeishuBot:
 								"action": "account_login",
 								"account_id": account.id,
 								"platform": account.platform,
-								"name": account.name,
-							},
-						},
-						{
-							"tag": "button",
-							"text": {"tag": "plain_text", "content": "🗑️ 删除"},
-							"type": "danger",
-							"value": {
-								"action": "account_delete",
-								"account_id": account.id,
 								"name": account.name,
 							},
 						},

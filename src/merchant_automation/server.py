@@ -643,6 +643,38 @@ async def _handle_card_action_event(event: dict) -> None:
 	if not action_type:
 		return
 
+	if action_type == 'account_login':
+		account_id = value.get('account_id')
+		if not account_id:
+			await _feishu_bot.send_text(chat_id, '未找到要登录的账号，请发送“账号列表”后重试。')
+			return
+		account = await _account_manager.get_account(account_id)
+		if account is None:
+			await _feishu_bot.send_text(chat_id, '账号不存在或已被移除，请发送“账号列表”查看当前账号。')
+			return
+		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
+		await _feishu_bot.send_text(
+			chat_id,
+			f'正在打开 {account.platform}/{account.name} 的登录窗口，请在浏览器中完成登录。',
+		)
+		asyncio.create_task(_execute_login_flow(account.id, chat_id))
+		return
+
+	if action_type == 'account_refresh':
+		await _send_account_card(chat_id)
+		return
+
+	if action_type == 'account_add':
+		await _feishu_bot.send_text(
+			chat_id,
+			'发送“登录 <平台> <店铺名>”即可添加或重新登录账号，例如：登录 美团 江湖饭焗。',
+		)
+		return
+
+	if action_type == 'account_delete':
+		await _feishu_bot.send_text(chat_id, '为避免误删，飞书端暂不直接删除账号。需要停用账号请联系管理员处理。')
+		return
+
 	task_id = value.get('task_id')
 
 	if action_type == 'retry' and task_id:
@@ -667,6 +699,11 @@ async def _handle_card_action_event(event: dict) -> None:
 			await _pool.cancel(task_id)
 		await _feishu_bot.send_text(chat_id, '🛑 已取消')
 		return
+
+
+async def _send_account_card(chat_id: str) -> None:
+	accounts = await _account_manager.get_all_accounts()
+	await _feishu_bot.send_card(chat_id, _feishu_bot.build_account_card(accounts))
 
 
 async def _handle_message_event(event: dict) -> None:
@@ -841,12 +878,86 @@ async def _handle_attachment_message(
 	)
 
 
+def _normalize_command_text(text: str) -> str:
+	return re.sub(r'[\s，。！？?、；;：:,.!`~"“”\'‘’（）()\[\]【】<>《》]+', '', text).lower()
+
+
+def _classify_special_command(text: str) -> str | None:
+	raw = text.strip().lower()
+	compact = _normalize_command_text(text)
+	if raw in ('?', '？') or compact in ('help', '帮助'):
+		return 'help'
+	if any(keyword in compact for keyword in ('帮助', '怎么用', '如何使用', '使用说明', '指令说明')):
+		return 'help'
+	if compact in ('状态', '任务', 'tasks') or any(keyword in compact for keyword in ('任务状态', '任务进度', '排队', '运行中')):
+		return 'status'
+	if compact in ('历史', 'history') or any(keyword in compact for keyword in ('历史记录', '最近记录', '执行记录')):
+		return 'history'
+	if compact in ('账号', '账户', 'accounts') or any(
+		keyword in compact
+		for keyword in ('账号列表', '账户列表', '我的账号', '我的账户', '登录状态', '账号状态', '账户状态')
+	):
+		return 'accounts'
+	if compact in ('附件', '附件列表', 'attachments') or any(
+		keyword in compact
+		for keyword in ('最近附件', '最近图片', '图片列表', '文件列表', '上传内容')
+	):
+		return 'attachments'
+	if _is_store_management_command(compact):
+		return 'stores'
+	return None
+
+
+def _is_store_management_command(compact: str) -> bool:
+	if compact in ('门店', '店铺', 'stores'):
+		return True
+	query_phrases = (
+		'门店列表',
+		'店铺列表',
+		'我的门店',
+		'我的店铺',
+		'查看门店',
+		'查看店铺',
+		'门店管理',
+		'店铺管理',
+		'门店信息',
+		'店铺信息',
+	)
+	if compact not in query_phrases and not any(compact.startswith(prefix) for prefix in ('查看门店', '查看店铺')):
+		return False
+	operation_keywords = (
+		'改',
+		'修改',
+		'更改',
+		'变更',
+		'设置',
+		'设为',
+		'换成',
+		'上传',
+		'电话',
+		'营业时间',
+		'照片',
+		'图片',
+		'地址',
+		'名称',
+		'公告',
+		'简介',
+	)
+	return not any(keyword in compact for keyword in operation_keywords)
+
+
 async def _handle_special_command(text: str, user_id: str, chat_id: str, message_id: str) -> bool:
-	if text in ('帮助', 'help', '?', '？'):
+	# 登录命令处理
+	if await _handle_login_command(text, user_id, chat_id, message_id):
+		return True
+
+	command = _classify_special_command(text)
+
+	if command == 'help':
 		await _feishu_bot.reply_card(message_id, _feishu_bot.build_help_card())
 		return True
 
-	if text in ('状态', '任务', 'tasks'):
+	if command == 'status':
 		pending = await _task_queue.get_pending_tasks()
 		running = _pool.get_running_task_ids() if _pool else []
 		if not pending and not running:
@@ -858,15 +969,43 @@ async def _handle_special_command(text: str, user_id: str, chat_id: str, message
 			await _feishu_bot.reply_text(message_id, '\n'.join(lines))
 		return True
 
-	if text in ('历史', 'history'):
-		await _feishu_bot.reply_text(message_id, '📋 历史功能开发中，请访问 Dashboard: /dashboard')
+	if command == 'history':
+		await _feishu_bot.reply_text(
+			message_id,
+			'历史记录正在整理中。可以发送“状态”查看当前任务进度，任务完成后飞书卡片会同步更新结果。',
+		)
 		return True
 
-	# 登录命令处理
-	if await _handle_login_command(text, user_id, chat_id, message_id):
+	if command == 'accounts':
+		accounts = await _account_manager.get_all_accounts()
+		await _feishu_bot.reply_card(message_id, _feishu_bot.build_account_card(accounts))
+		return True
+
+	if command == 'stores':
+		await _reply_store_management(message_id)
+		return True
+
+	if command == 'attachments':
+		attachments = await _task_queue.get_recent_attachments(chat_id=chat_id, user_id=user_id, limit=5)
+		await _feishu_bot.reply_card(message_id, _feishu_bot.build_attachment_card(attachments))
 		return True
 
 	return False
+
+
+async def _reply_store_management(message_id: str) -> None:
+	accounts = await _account_manager.get_all_accounts()
+	lines = ['门店信息会跟随账号登录和任务绑定逐步完善。']
+	if accounts:
+		lines.append('当前已配置账号：')
+		for account in accounts[:5]:
+			platform = getattr(account, 'platform', '平台')
+			name = getattr(account, 'name', '未命名账号')
+			lines.append(f'• {platform}/{name}')
+	else:
+		lines.append('当前还没有已配置账号。')
+	lines.append('可以发送“账号列表”查看登录状态，或发送“登录 美团 <店铺名>”添加门店账号。')
+	await _feishu_bot.reply_text(message_id, '\n'.join(lines))
 
 
 async def _handle_login_command(text: str, user_id: str, chat_id: str, message_id: str) -> bool:
