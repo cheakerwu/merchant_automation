@@ -22,6 +22,7 @@ class AgentExplorer:
 	) -> None:
 		self._session = browser_session
 		self._llm = llm
+		self.last_history: Any = None
 
 	async def explore(
 		self,
@@ -58,6 +59,7 @@ class AgentExplorer:
 
 		try:
 			result = await agent.run(max_steps=max_steps, on_step_end=on_step_end)
+			self.last_history = result
 			return recorder.complete(f'Agent 探索完成: {result}')
 		except Exception as exc:
 			return recorder.fail(

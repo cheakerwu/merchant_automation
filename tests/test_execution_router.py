@@ -365,3 +365,95 @@ async def test_skips_step_executor_when_recent_failures(
 	mock_explorer.explore.assert_called_once()
 	assert trace.outcome is not None
 	assert trace.outcome.status == TraceOutcomeStatus.SUCCESS
+
+
+# ---------- Test 8: synthesizes candidate after successful agent ----------
+
+@pytest.mark.asyncio
+@patch('merchant_automation.operations.router.AgentExplorer')
+@patch('merchant_automation.operations.router.RecipeStepExecutor')
+async def test_router_synthesizes_candidate_after_successful_agent(
+	mock_step_class,
+	mock_explorer_class,
+	mock_browser_session,
+	mock_llm,
+	sample_bound_task,
+):
+	"""After successful agent exploration, router should synthesize and save a candidate RecipeDefinition."""
+	from merchant_automation.operations.router import ExecutionRouter
+	from merchant_automation.operations.recipe_store import RecipeStore
+
+	# Mock explorer to return success
+	mock_explorer = MagicMock()
+	mock_explorer_class.return_value = mock_explorer
+	mock_explorer.explore = AsyncMock(return_value=_make_success_trace())
+	mock_explorer.last_history = MagicMock()
+	mock_explorer.last_history.model_actions.return_value = [
+		{'navigate': {'url': 'https://example.com'}, 'interacted_element': None},
+	]
+
+	# Mock recipe store
+	mock_recipe_store = MagicMock(spec=RecipeStore)
+	mock_recipe_store.get_definition.return_value = None
+	mock_recipe_store.get_recipe.return_value = None
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		mock_llm,
+		recipe_store=mock_recipe_store,
+	)
+	trace = await router.execute(sample_bound_task)
+
+	# Should have called save_definition
+	mock_recipe_store.save_definition.assert_called_once()
+	saved_def = mock_recipe_store.save_definition.call_args[0][0]
+	assert saved_def.recipe_id == 'meituan.update_store_phone.v1'
+	assert len(saved_def.steps) > 0
+
+	# Should have upserted candidate metadata
+	mock_recipe_store.upsert_recipe.assert_called_once()
+
+
+# ---------- Test 9: does not overwrite promoted recipe ----------
+
+@pytest.mark.asyncio
+@patch('merchant_automation.operations.router.AgentExplorer')
+@patch('merchant_automation.operations.router.RecipeStepExecutor')
+async def test_router_does_not_overwrite_promoted_recipe(
+	mock_step_class,
+	mock_explorer_class,
+	mock_browser_session,
+	mock_llm,
+	sample_bound_task,
+):
+	"""Router should NOT synthesize a new definition when recipe is already promoted (prepare_ready+)."""
+	from merchant_automation.operations.router import ExecutionRouter
+	from merchant_automation.operations.recipe_store import RecipeStore
+
+	# Mock explorer to return success
+	mock_explorer = MagicMock()
+	mock_explorer_class.return_value = mock_explorer
+	mock_explorer.explore = AsyncMock(return_value=_make_success_trace())
+
+	# Mock recipe store - recipe already promoted
+	mock_recipe_store = MagicMock(spec=RecipeStore)
+	mock_recipe_store.get_definition.return_value = None
+	promoted_recipe = RecipeMetadata(
+		recipe_id='meituan.update_store_phone.v1',
+		operation_id='update_store_phone',
+		platform='meituan',
+		version=1,
+		status=RecipeStatus.PREPARE_READY,
+	)
+	mock_recipe_store.get_recipe.return_value = promoted_recipe
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		mock_llm,
+		recipe_store=mock_recipe_store,
+	)
+	trace = await router.execute(sample_bound_task)
+
+	# Should NOT have called save_definition (recipe already promoted)
+	mock_recipe_store.save_definition.assert_not_called()
+	mock_recipe_store.upsert_recipe.assert_not_called()

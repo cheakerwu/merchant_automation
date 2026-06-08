@@ -9,6 +9,7 @@ from typing import Iterator
 
 from pydantic import BaseModel, ConfigDict
 
+from merchant_automation.operations.recipe_definition import RecipeDefinition
 from merchant_automation.operations.schemas import (
 	ExecutionMode,
 	RecipeMetadata,
@@ -50,6 +51,17 @@ class RecipeStore:
 					created_at TEXT NOT NULL,
 					updated_at TEXT NOT NULL,
 					payload_json TEXT NOT NULL
+				)
+				'''
+			)
+			connection.execute(
+				'''
+				CREATE TABLE IF NOT EXISTS recipe_definitions (
+					recipe_id TEXT PRIMARY KEY,
+					payload_json TEXT NOT NULL,
+					source TEXT NOT NULL DEFAULT 'auto',
+					created_at TEXT NOT NULL,
+					updated_at TEXT NOT NULL
 				)
 				'''
 			)
@@ -124,6 +136,46 @@ class RecipeStore:
 					_dump_model(recipe),
 				),
 			)
+
+	def save_definition(self, definition: RecipeDefinition, *, source: str = 'auto') -> None:
+		now = _now()
+		with self._connection() as connection:
+			# Preserve created_at on update
+			existing = connection.execute(
+				'SELECT created_at FROM recipe_definitions WHERE recipe_id = ?',
+				(definition.recipe_id,),
+			).fetchone()
+			created_at = existing['created_at'] if existing else now
+
+			connection.execute(
+				'''
+				INSERT INTO recipe_definitions (
+					recipe_id, payload_json, source, created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT(recipe_id) DO UPDATE SET
+					payload_json = excluded.payload_json,
+					source = excluded.source,
+					updated_at = excluded.updated_at
+				''',
+				(definition.recipe_id, _dump_model(definition), source, created_at, now),
+			)
+
+	def get_definition(self, recipe_id: str) -> RecipeDefinition | None:
+		with self._connection() as connection:
+			row = connection.execute(
+				'SELECT payload_json FROM recipe_definitions WHERE recipe_id = ?',
+				(recipe_id,),
+			).fetchone()
+		if row is None:
+			return None
+		return RecipeDefinition.model_validate_json(row['payload_json'])
+
+	def list_definitions(self) -> list[RecipeDefinition]:
+		with self._connection() as connection:
+			rows = connection.execute(
+				'SELECT payload_json FROM recipe_definitions ORDER BY recipe_id'
+			).fetchall()
+		return [RecipeDefinition.model_validate_json(row['payload_json']) for row in rows]
 
 	def update_status(self, recipe_id: str, new_status: RecipeStatus) -> bool:
 		now = _now()

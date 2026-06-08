@@ -67,7 +67,7 @@ async def test_run_exploration_uses_active_account_profile_and_prepare_mode(tmp_
 		),
 		browser_session_factory=lambda profile: session,
 		llm_factory=lambda: MagicMock(),
-		router_factory=lambda browser_session, llm, store: router,
+		router_factory=lambda browser_session, llm, store, recipe_defs=None, recipe_store=None: router,
 	)
 
 	assert session.started is True
@@ -101,5 +101,5 @@ async def test_run_exploration_requires_matching_account(tmp_path: Path):
 			),
 			browser_session_factory=lambda profile: FakeBrowserSession(),
 			llm_factory=lambda: MagicMock(),
-			router_factory=lambda browser_session, llm, store: FakeRouter(),
+			router_factory=lambda browser_session, llm, store, recipe_defs=None, recipe_store=None: FakeRouter(),
 		)

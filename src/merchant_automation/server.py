@@ -221,7 +221,7 @@ class MerchantTaskExecutor:
 			)
 
 			# Build recipe definitions map
-			recipe_defs: dict = {}  # TODO: load from RecipeStore
+			recipe_defs = {d.recipe_id: d for d in self._recipe_store.list_definitions()}
 
 			# Create ExecutionRouter
 			router = ExecutionRouter(
@@ -229,6 +229,7 @@ class MerchantTaskExecutor:
 				llm=llm,
 				store=self._operation_store,
 				recipe_definitions=recipe_defs,
+				recipe_store=self._recipe_store,
 			)
 
 			# Execute

@@ -97,6 +97,12 @@ def create_dashboard_router(
 	def recipe_list() -> HTMLResponse:
 		if recipe_store is None:
 			return HTMLResponse(_page('Recipe 控制台', '<p>Recipe Store 未配置</p>'))
+
+		# Build definition info map: recipe_id -> (step_count, source)
+		defn_info: dict[str, tuple[int, str]] = {}
+		for defn in recipe_store.list_definitions():
+			defn_info[defn.recipe_id] = (len(defn.steps), 'auto')
+
 		rows = ''.join(
 			_table_row(
 				summary.recipe_id,
@@ -107,6 +113,8 @@ def create_dashboard_router(
 				_format_rate(summary.success_rates.get(ExecutionMode.PREPARE)),
 				_format_rate(summary.success_rates.get(ExecutionMode.COMMIT)),
 				', '.join(sorted(m.value for m in summary.allowed_modes)),
+				str(defn_info.get(summary.recipe_id, (0, '-'))[0]) if summary.recipe_id in defn_info else '-',
+				defn_info.get(summary.recipe_id, (0, '-'))[1],
 			)
 			for summary in recipe_store.list_recipes()
 		)
@@ -114,7 +122,7 @@ def create_dashboard_router(
 			_page(
 				'Recipe 控制台',
 				_table(
-					['Recipe ID', 'Operation', '平台', '版本', '状态', 'prepare 成功率', 'commit 成功率', '允许 Mode'],
+					['Recipe ID', 'Operation', '平台', '版本', '状态', 'prepare 成功率', 'commit 成功率', '允许 Mode', '步骤数', '来源'],
 					rows,
 				),
 			)
@@ -159,10 +167,31 @@ def create_dashboard_router(
 				]
 			),
 		)
+
+		# Definition section
+		defn_section = ''
+		defn = recipe_store.get_definition(recipe_id)
+		if defn:
+			# Entry URL
+			entry_url_html = f'<p><strong>入口 URL:</strong> {escape(defn.entry_url or "-")}</p>' if defn.entry_url else ''
+
+			# Steps table
+			step_rows = ''.join(
+				_table_row(
+					escape(step.action.value),
+					escape(step.target or '-'),
+					escape(step.value or '-'),
+					escape(step.url or '-'),
+				)
+				for step in defn.steps
+			)
+			steps_table = _table(['操作', '目标', '值', 'URL'], step_rows)
+			defn_section = f'<h2>执行步骤</h2>{entry_url_html}{steps_table}'
+
 		return HTMLResponse(
 			_page(
 				f'Recipe: {recipe.recipe_id}',
-				detail_table + '<h2>成功率</h2>' + success_table + status_form,
+				detail_table + '<h2>成功率</h2>' + success_table + defn_section + status_form,
 			)
 		)
 

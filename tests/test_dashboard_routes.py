@@ -7,6 +7,7 @@ from merchant_automation.accounts.store import AccountStore
 from merchant_automation.dashboard.routes import create_dashboard_app
 from merchant_automation.operations.failure import FailureAnalyzer
 from merchant_automation.operations.preflight import CommitPolicy
+from merchant_automation.operations.recipe_definition import RecipeDefinition, RecipeStep, RecipeStepAction
 from merchant_automation.operations.recipe_store import RecipeStore
 from merchant_automation.operations.schemas import ExecutionMode, FailureType, RecipeMetadata, RecipeStatus
 from merchant_automation.operations.service import OperationPlanningService
@@ -331,3 +332,123 @@ def test_nav_bar_includes_new_links(tmp_path: Path):
 	assert '/dashboard/accounts' in response.text
 	assert 'Recipe 控制台' in response.text
 	assert '账号门店' in response.text
+
+
+# ---------------------------------------------------------------------------
+# M4: Definition-aware Recipe Console tests
+# ---------------------------------------------------------------------------
+
+
+def _seed_recipe_store_with_definitions(tmp_path: Path) -> RecipeStore:
+	"""Seed recipe store with both metadata and definitions."""
+	store = RecipeStore(tmp_path / 'recipes.db')
+	store.initialize()
+
+	# Recipe with definition (auto-synthesized)
+	store.upsert_recipe(
+		RecipeMetadata(
+			recipe_id='meituan.update_store_phone.v1',
+			operation_id='update_store_phone',
+			platform='meituan',
+			version=1,
+			status=RecipeStatus.CANDIDATE,
+			allowed_modes={ExecutionMode.PREPARE},
+			success_rates={},
+		)
+	)
+	store.save_definition(
+		RecipeDefinition(
+			recipe_id='meituan.update_store_phone.v1',
+			steps=[
+				RecipeStep(action=RecipeStepAction.NAVIGATE, url='https://e.waimai.meituan.com/', value='https://e.waimai.meituan.com/'),
+				RecipeStep(action=RecipeStepAction.CLICK, target='电话输入框'),
+				RecipeStep(action=RecipeStepAction.FILL, target='电话输入框', value='{phone}'),
+				RecipeStep(action=RecipeStepAction.STOP_BEFORE_SUBMIT),
+			],
+			entry_url='https://e.waimai.meituan.com/',
+		),
+		source='auto',
+	)
+
+	# Recipe without definition
+	store.upsert_recipe(
+		RecipeMetadata(
+			recipe_id='douyin.update_store_name.v2',
+			operation_id='update_store_name',
+			platform='douyin',
+			version=2,
+			status=RecipeStatus.PREPARE_READY,
+			allowed_modes={ExecutionMode.DRY_RUN},
+			success_rates={ExecutionMode.DRY_RUN: 1.0},
+		)
+	)
+
+	return store
+
+
+def test_recipe_list_shows_step_count_and_source(tmp_path: Path):
+	recipe_store = _seed_recipe_store_with_definitions(tmp_path)
+	client = TestClient(create_dashboard_app(_operation_store(tmp_path), recipe_store=recipe_store))
+
+	response = client.get('/dashboard/recipes')
+
+	assert response.status_code == 200
+	# Should show step count and source columns
+	assert '步骤数' in response.text
+	assert '来源' in response.text
+	# First recipe has 4 steps, auto source
+	assert '4' in response.text
+	assert 'auto' in response.text
+	# Second recipe has no definition
+	assert '-' in response.text  # placeholder for missing definition
+
+
+def test_recipe_detail_renders_synthesized_steps(tmp_path: Path):
+	recipe_store = _seed_recipe_store_with_definitions(tmp_path)
+	client = TestClient(create_dashboard_app(_operation_store(tmp_path), recipe_store=recipe_store))
+
+	response = client.get('/dashboard/recipes/meituan.update_store_phone.v1')
+
+	assert response.status_code == 200
+	# Should show entry_url
+	assert 'https://e.waimai.meituan.com/' in response.text
+	# Should show step table headers
+	assert '操作' in response.text
+	assert '目标' in response.text
+	assert '值' in response.text
+	# Should show step actions
+	assert 'navigate' in response.text
+	assert 'click' in response.text
+	assert 'fill' in response.text
+	assert 'stop_before_submit' in response.text
+	# Should show targets
+	assert '电话输入框' in response.text
+
+
+def test_recipe_status_promotion_via_form(tmp_path: Path):
+	recipe_store = _seed_recipe_store_with_definitions(tmp_path)
+	client = TestClient(create_dashboard_app(_operation_store(tmp_path), recipe_store=recipe_store))
+
+	# Promote candidate → prepare_ready
+	response = client.post(
+		'/dashboard/recipes/meituan.update_store_phone.v1/status',
+		data={'new_status': 'prepare_ready'},
+		follow_redirects=False,
+	)
+
+	assert response.status_code == 307
+
+	recipe = recipe_store.get_recipe('meituan.update_store_phone.v1')
+	assert recipe is not None
+	assert recipe.status == RecipeStatus.PREPARE_READY
+
+
+def test_recipe_detail_shows_entry_url(tmp_path: Path):
+	recipe_store = _seed_recipe_store_with_definitions(tmp_path)
+	client = TestClient(create_dashboard_app(_operation_store(tmp_path), recipe_store=recipe_store))
+
+	response = client.get('/dashboard/recipes/meituan.update_store_phone.v1')
+
+	assert response.status_code == 200
+	assert '入口 URL' in response.text
+	assert 'https://e.waimai.meituan.com/' in response.text

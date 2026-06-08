@@ -14,6 +14,7 @@ from merchant_automation.accounts.manager import AccountManager
 from merchant_automation.accounts.models import AccountStatus
 from merchant_automation.config import get_config
 from merchant_automation.operations.preflight import CommitPolicy
+from merchant_automation.operations.recipe_store import RecipeStore
 from merchant_automation.operations.router import ExecutionRouter
 from merchant_automation.operations.schemas import ExecutionMode
 from merchant_automation.operations.service import OperationPlanningService
@@ -107,6 +108,9 @@ async def run_exploration(
 		store = OperationStore(db_path.parent / "merchant.db")
 		store.initialize()
 
+		recipe_store = RecipeStore(db_path.parent / "recipe.db")
+		recipe_store.initialize()
+
 		planning_service = OperationPlanningService()
 		planning = planning_service.plan_text(
 			request.instruction,
@@ -132,7 +136,8 @@ async def run_exploration(
 			await session.start()
 			await session.navigate_to(request.start_url or _merchant_home_url(request.platform))
 			llm = (llm_factory or _default_llm_factory)()
-			router = (router_factory or _default_router_factory)(session, llm, store)
+			recipe_defs = {d.recipe_id: d for d in recipe_store.list_definitions()}
+			router = (router_factory or _default_router_factory)(session, llm, store, recipe_defs, recipe_store)
 			trace = await router.execute(bound_task, raw_input=request.instruction, max_steps=request.max_steps)
 			trace_id = store.save_trace(trace, run_id=run_id)
 			await account_manager.touch(account.id)
@@ -182,12 +187,19 @@ def _default_llm_factory() -> Any:
 	)
 
 
-def _default_router_factory(browser_session: BrowserSessionLike, llm: Any, store: OperationStore) -> ExecutionRouter:
+def _default_router_factory(
+	browser_session: BrowserSessionLike,
+	llm: Any,
+	store: OperationStore,
+	recipe_definitions: dict | None = None,
+	recipe_store: RecipeStore | None = None,
+) -> ExecutionRouter:
 	return ExecutionRouter(
 		browser_session=browser_session,
 		llm=llm,
 		store=store,
-		recipe_definitions={},
+		recipe_definitions=recipe_definitions or {},
+		recipe_store=recipe_store,
 	)
 
 
