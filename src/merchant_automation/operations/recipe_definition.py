@@ -38,4 +38,7 @@ class RecipeDefinition(BaseModel):
 	steps: list[RecipeStep] = Field(default_factory=list)
 	entry_url: str | None = None
 	verify_after_commit: list[str] = Field(default_factory=list)
+	page_variant: str | None = None
+	verified_at: str | None = None
+	verified_account_id: str | None = None
 

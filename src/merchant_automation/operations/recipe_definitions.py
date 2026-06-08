@@ -130,6 +130,9 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
     'meituan.update_store_decoration_image.v1': RecipeDefinition(
         recipe_id='meituan.update_store_decoration_image.v1',
         entry_url='https://e.waimai.meituan.com/new_fe/shop/decorate',
+        page_variant='2026-06',
+        verified_at='2026-06-08',
+        verified_account_id='system',
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
