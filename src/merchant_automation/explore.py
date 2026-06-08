@@ -110,6 +110,7 @@ async def run_exploration(
 
 		recipe_store = RecipeStore(db_path.parent / "recipe.db")
 		recipe_store.initialize()
+		recipe_store.seed_default_definitions()
 
 		planning_service = OperationPlanningService()
 		planning = planning_service.plan_text(

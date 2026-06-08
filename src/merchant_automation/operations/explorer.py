@@ -7,7 +7,13 @@ from browser_use import Agent, BrowserSession
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from merchant_automation.operations.schemas import ExecutionMode, FailureType, OperationContract
-from merchant_automation.operations.traces import ExecutionTrace, TraceRecorder, TraceStepKind
+from merchant_automation.operations.traces import (
+	ExecutionTrace,
+	TraceRecorder,
+	TraceStepKind,
+	record_screenshot_bytes,
+	trace_screenshot_paths,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +48,7 @@ class AgentExplorer:
 			browser_session=self._session,
 			max_failures=3,
 			use_vision=True,
+			keep_alive=True,  # 保持浏览器打开以便截图
 		)
 
 		async def on_step_end(agent_ref: Any) -> None:
@@ -60,12 +67,37 @@ class AgentExplorer:
 		try:
 			result = await agent.run(max_steps=max_steps, on_step_end=on_step_end)
 			self.last_history = result
+			await self._record_prepare_evidence_screenshot(mode, recorder)
 			return recorder.complete(f'Agent 探索完成: {result}')
 		except Exception as exc:
 			return recorder.fail(
 				failure_type=FailureType.SUBMIT_FAILED,
 				message=f'Agent 探索失败: {exc}',
 			)
+
+	async def _record_prepare_evidence_screenshot(
+		self,
+		mode: ExecutionMode,
+		recorder: TraceRecorder,
+	) -> None:
+		"""在 prepare 模式下截图作为证据。"""
+		if mode != ExecutionMode.PREPARE or trace_screenshot_paths(recorder.trace):
+			return
+		try:
+			screenshot_bytes = await self._session.take_screenshot()
+			record_screenshot_bytes(
+				recorder,
+				'prepare 证据截图',
+				screenshot_bytes,
+			)
+		except Exception as e:
+			logger.warning('Failed to take prepare evidence screenshot: %s', e)
+		finally:
+			# 截图后关闭浏览器
+			try:
+				await self._session.close()
+			except Exception:
+				pass
 
 	def _build_task_prompt(
 		self,

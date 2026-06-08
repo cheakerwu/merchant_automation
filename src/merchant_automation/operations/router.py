@@ -12,6 +12,7 @@ from merchant_automation.operations.catalog import OperationCatalog
 from merchant_automation.operations.executor import RecipeStepExecutor, StepExecutionError
 from merchant_automation.operations.explorer import AgentExplorer
 from merchant_automation.operations.recipe_definition import RecipeDefinition
+from merchant_automation.operations.recipe_definitions import merge_recipe_definitions
 from merchant_automation.operations.recipe_store import RecipeStore
 from merchant_automation.operations.schemas import ExecutionMode, FailureType, RecipeMetadata, RecipeStatus
 from merchant_automation.operations.storage import OperationStore
@@ -42,7 +43,7 @@ class ExecutionRouter:
 		self._session = browser_session
 		self._llm = llm
 		self._store = store
-		self._recipe_defs = recipe_definitions or {}
+		self._recipe_defs = merge_recipe_definitions(recipe_definitions)
 		self._recipe_store = recipe_store
 		self._validate_synthesized = _validate_synthesized
 		self._step_executor = RecipeStepExecutor(browser_session, llm)
@@ -225,4 +226,3 @@ class ExecutionRouter:
 				# If we can't parse the time, count it as recent to be safe
 				count += 1
 		return count
-

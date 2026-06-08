@@ -54,6 +54,18 @@ def sample_bound_task():
 
 
 @pytest.fixture
+def unseeded_bound_task(sample_bound_task):
+	task = sample_bound_task.task.model_copy(update={'recipe_id': 'custom.update_store_phone.v1'})
+	recipe = sample_bound_task.recipe.model_copy(
+		update={
+			'recipe_id': 'custom.update_store_phone.v1',
+			'status': RecipeStatus.CANDIDATE,
+		}
+	)
+	return sample_bound_task.model_copy(update={'task': task, 'recipe': recipe})
+
+
+@pytest.fixture
 def parse_only_bound_task():
 	return BoundOperationTask(
 		task=OperationTask(
@@ -143,6 +155,35 @@ async def test_routes_to_step_executor_when_recipe_has_steps(
 	assert trace.outcome.status == TraceOutcomeStatus.SUCCESS
 
 
+# ---------- Test 2.1: routes to built-in defaults when persisted definitions are empty ----------
+
+@pytest.mark.asyncio
+@patch('merchant_automation.operations.router.RecipeStepExecutor')
+async def test_routes_to_builtin_default_definition_when_definition_map_empty(
+	mock_step_class,
+	mock_browser_session,
+	sample_bound_task,
+):
+	"""Built-in default definitions keep default recipes deterministic when the DB table is empty."""
+	mock_executor = MagicMock()
+	mock_step_class.return_value = mock_executor
+	mock_executor.execute = AsyncMock(return_value=_make_success_trace())
+
+	router = ExecutionRouter(
+		mock_browser_session,
+		llm=None,
+		recipe_definitions={},
+	)
+	trace = await router.execute(sample_bound_task)
+
+	mock_executor.execute.assert_called_once()
+	default_definition = mock_executor.execute.call_args.args[0]
+	assert default_definition.recipe_id == 'meituan.update_store_phone.v1'
+	assert default_definition.steps
+	assert trace.outcome is not None
+	assert trace.outcome.status == TraceOutcomeStatus.SUCCESS
+
+
 # ---------- Test 3: routes to agent explorer when no steps ----------
 
 @pytest.mark.asyncio
@@ -153,7 +194,7 @@ async def test_routes_to_agent_explorer_when_no_steps(
 	mock_step_class,
 	mock_browser_session,
 	mock_llm,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	"""When no RecipeDefinition is found, ExecutionRouter should fall back to AgentExplorer."""
 	from merchant_automation.operations.router import ExecutionRouter
@@ -163,7 +204,7 @@ async def test_routes_to_agent_explorer_when_no_steps(
 	mock_explorer.explore = AsyncMock(return_value=_make_success_trace())
 
 	router = ExecutionRouter(mock_browser_session, mock_llm)
-	trace = await router.execute(sample_bound_task)
+	trace = await router.execute(unseeded_bound_task)
 
 	mock_explorer.explore.assert_called_once()
 
@@ -176,7 +217,7 @@ async def test_forwards_max_steps_to_agent_explorer(
 	mock_explorer_class,
 	mock_browser_session,
 	mock_llm,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	mock_explorer = MagicMock()
 	mock_explorer_class.return_value = mock_explorer
@@ -188,7 +229,7 @@ async def test_forwards_max_steps_to_agent_explorer(
 		recipe_definitions={},
 	)
 
-	trace = await router.execute(sample_bound_task, raw_input='test input', max_steps=12)
+	trace = await router.execute(unseeded_bound_task, raw_input='test input', max_steps=12)
 
 	mock_explorer.explore.assert_called_once()
 	assert mock_explorer.explore.call_args.kwargs['max_steps'] == 12
@@ -244,13 +285,13 @@ async def test_falls_back_to_explorer_on_step_failure(
 async def test_fails_when_no_executor_available(
 	mock_step_class,
 	mock_browser_session,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	"""When no RecipeDefinition exists and no LLM is configured, ExecutionRouter should fail."""
 	from merchant_automation.operations.router import ExecutionRouter
 
 	router = ExecutionRouter(mock_browser_session, llm=None)
-	trace = await router.execute(sample_bound_task)
+	trace = await router.execute(unseeded_bound_task)
 
 	assert trace.outcome is not None
 	assert trace.outcome.status == TraceOutcomeStatus.FAILED
@@ -383,7 +424,7 @@ async def test_router_synthesizes_candidate_after_successful_agent(
 	mock_explorer_class,
 	mock_browser_session,
 	mock_llm,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	"""After successful agent exploration, router should synthesize and save a candidate RecipeDefinition."""
 	from merchant_automation.operations.router import ExecutionRouter
@@ -408,12 +449,12 @@ async def test_router_synthesizes_candidate_after_successful_agent(
 		mock_llm,
 		recipe_store=mock_recipe_store,
 	)
-	trace = await router.execute(sample_bound_task)
+	trace = await router.execute(unseeded_bound_task)
 
 	# Should have called save_definition
 	mock_recipe_store.save_definition.assert_called_once()
 	saved_def = mock_recipe_store.save_definition.call_args[0][0]
-	assert saved_def.recipe_id == 'meituan.update_store_phone.v1'
+	assert saved_def.recipe_id == 'custom.update_store_phone.v1'
 	assert len(saved_def.steps) > 0
 
 	# Should have upserted candidate metadata
@@ -430,7 +471,7 @@ async def test_router_does_not_overwrite_promoted_recipe(
 	mock_explorer_class,
 	mock_browser_session,
 	mock_llm,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	"""Router should NOT synthesize a new definition when recipe is already promoted (prepare_ready+)."""
 	from merchant_automation.operations.router import ExecutionRouter
@@ -445,7 +486,7 @@ async def test_router_does_not_overwrite_promoted_recipe(
 	mock_recipe_store = MagicMock(spec=RecipeStore)
 	mock_recipe_store.get_definition.return_value = None
 	promoted_recipe = RecipeMetadata(
-		recipe_id='meituan.update_store_phone.v1',
+		recipe_id='custom.update_store_phone.v1',
 		operation_id='update_store_phone',
 		platform='meituan',
 		version=1,
@@ -458,7 +499,7 @@ async def test_router_does_not_overwrite_promoted_recipe(
 		mock_llm,
 		recipe_store=mock_recipe_store,
 	)
-	trace = await router.execute(sample_bound_task)
+	trace = await router.execute(unseeded_bound_task)
 
 	# Should NOT have called save_definition (recipe already promoted)
 	mock_recipe_store.save_definition.assert_not_called()
@@ -578,7 +619,7 @@ async def test_router_validates_synthesized_recipe_before_saving(
 	mock_explorer_class,
 	mock_browser_session,
 	mock_llm,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	"""Router should validate synthesized recipe by dry-run before saving to store."""
 	from merchant_automation.operations.router import ExecutionRouter
@@ -609,7 +650,7 @@ async def test_router_validates_synthesized_recipe_before_saving(
 		recipe_store=mock_recipe_store,
 		_validate_synthesized=True,
 	)
-	trace = await router.execute(sample_bound_task)
+	trace = await router.execute(unseeded_bound_task)
 
 	# Should have validated with step executor
 	mock_executor.execute_sync.assert_called_once()
@@ -627,7 +668,7 @@ async def test_router_skips_saving_when_validation_fails(
 	mock_explorer_class,
 	mock_browser_session,
 	mock_llm,
-	sample_bound_task,
+	unseeded_bound_task,
 ):
 	"""Router should NOT save definition when dry-run validation fails."""
 	from merchant_automation.operations.executor import StepExecutionError
@@ -660,7 +701,7 @@ async def test_router_skips_saving_when_validation_fails(
 		recipe_store=mock_recipe_store,
 		_validate_synthesized=True,
 	)
-	trace = await router.execute(sample_bound_task)
+	trace = await router.execute(unseeded_bound_task)
 
 	# Should have attempted validation
 	mock_executor.execute_sync.assert_called_once()

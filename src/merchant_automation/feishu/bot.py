@@ -22,14 +22,14 @@ from merchant_automation.tasks.models import Attachment, Task, TaskMetrics, Task
 
 # Status -> (display label, header color)
 _STATUS_DISPLAY: dict[str, tuple[str, str]] = {
-	TaskStatus.PENDING.value: ("Pending", "grey"),
-	TaskStatus.PARSING.value: ("Parsing", "blue"),
-	TaskStatus.PREPARING.value: ("Preparing", "blue"),
-	TaskStatus.EXECUTING.value: ("Running", "blue"),
-	TaskStatus.AWAITING_APPROVAL.value: ("Approval Needed", "orange"),
-	TaskStatus.COMPLETED.value: ("Completed", "green"),
-	TaskStatus.FAILED.value: ("Failed", "red"),
-	TaskStatus.CANCELLED.value: ("Cancelled", "grey"),
+	TaskStatus.PENDING.value: ("等待中", "grey"),
+	TaskStatus.PARSING.value: ("解析中", "blue"),
+	TaskStatus.PREPARING.value: ("准备中", "blue"),
+	TaskStatus.EXECUTING.value: ("执行中", "blue"),
+	TaskStatus.AWAITING_APPROVAL.value: ("等待确认", "orange"),
+	TaskStatus.COMPLETED.value: ("已完成", "green"),
+	TaskStatus.FAILED.value: ("失败", "red"),
+	TaskStatus.CANCELLED.value: ("已取消", "grey"),
 }
 
 
@@ -216,9 +216,9 @@ class FeishuBot:
 			)
 
 	def build_task_card(self, task: Task) -> dict:
-		"""Build an interactive card displaying task status with color coding."""
+		"""Build an interactive card displaying user-facing task status."""
 		label, color = _STATUS_DISPLAY.get(
-			task.status.value, ("Unknown", "grey")
+			task.status.value, ("未知", "grey")
 		)
 
 		created_at_str = task.created_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -233,7 +233,7 @@ class FeishuBot:
 		card: dict = {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": f"任务 [{task.id[:8]}]"},
+				"title": {"tag": "plain_text", "content": f"任务 {task.id[:8]} · {label}"},
 				"template": color,
 			},
 			"elements": [],
@@ -241,7 +241,6 @@ class FeishuBot:
 
 		elements: list[dict] = card["elements"]
 
-		# Task info fields
 		fields: list[dict] = [
 			{
 				"is_short": True,
@@ -259,71 +258,72 @@ class FeishuBot:
 				"is_short": True,
 				"text": {"tag": "lark_md", "content": f"**创建时间:**\n{created_at_str}"},
 			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**意图:**\n{task.intent or '未分类'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**目标:**\n{task.intent_target or '-'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**置信度:**\n{task.intent_confidence if task.intent_confidence is not None else '-'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**策略:**\n{task.policy_status or '未检查'}"},
-			},
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**Prompt:**\n{task.prompt_version or '-'}"},
-			},
 		]
+		if task.intent:
+			fields.append(
+				{
+					"is_short": True,
+					"text": {"tag": "lark_md", "content": f"**操作:**\n{task.intent}"},
+				}
+			)
+		if task.intent_target:
+			fields.append(
+				{
+					"is_short": True,
+					"text": {"tag": "lark_md", "content": f"**目标:**\n{task.intent_target}"},
+				}
+			)
+		if task.policy_status:
+			fields.append(
+				{
+					"is_short": True,
+					"text": {"tag": "lark_md", "content": f"**安全检查:**\n{task.policy_status}"},
+				}
+			)
 		elements.append({"tag": "div", "fields": fields})
 
-		# Instruction block
+		instruction_lines = ["**指令:**", task.instruction]
+		if task.raw_text and task.raw_text != task.instruction:
+			instruction_lines.extend(["", f"**来源输入:**\n{task.raw_text}"])
+		if task.policy_reason:
+			instruction_lines.extend(["", f"**安全说明:**\n{task.policy_reason}"])
+
 		elements.append({"tag": "hr"})
 		elements.append(
 			{
 				"tag": "div",
 				"text": {
 					"tag": "lark_md",
-					"content": (
-						f"**指令:**\n{task.instruction}\n\n"
-						f"**原始输入:**\n{task.raw_text or task.instruction}\n\n"
-						f"**策略原因:**\n{task.policy_reason or '-'}"
-					),
+					"content": "\n".join(instruction_lines),
 				},
 			}
 		)
 
-		# Result / error block (if present)
 		if task.result is not None:
 			elements.append({"tag": "hr"})
-			result_icon = "✅" if task.result.success else "❌"
+			result_label = "成功" if task.result.success else "失败"
 			elements.append(
 				{
 					"tag": "div",
 					"text": {
 						"tag": "lark_md",
-						"content": f"**Result:** {result_icon} {task.result.message}",
+						"content": f"**执行结果:**\n{result_label}: {task.result.message}",
 					},
 				}
 			)
 		elif task.error is not None:
 			elements.append({"tag": "hr"})
+			failure_reason = task.error_message_user or task.error
 			elements.append(
 				{
 					"tag": "div",
 					"text": {
 						"tag": "lark_md",
-						"content": f"**Error:**\n{task.error}",
+						"content": f"**失败原因:**\n{failure_reason}",
 					},
 				}
 			)
 
-		# Action buttons based on current status
 		elements.append({"tag": "hr"})
 		actions: list[dict] = []
 
@@ -413,7 +413,7 @@ class FeishuBot:
 		return {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": "使用指南"},
+				"title": {"tag": "plain_text", "content": "商家后台助手"},
 				"template": "blue",
 			},
 			"elements": [
@@ -423,9 +423,9 @@ class FeishuBot:
 						"tag": "lark_md",
 						"content": (
 							"**创建任务**\n"
-							"- 打开美团江湖饭焗\n"
-							"- 美团江湖饭焗 搜索咖啡\n"
-							"- 江湖饭焗 美团 把咖啡价格改成25"
+							"- 美团江湖饭焗修改商家电话为13888888888\n"
+							"- 把美团 江湖饭焗 营业时间改为 09:00-22:00\n"
+							"- 把美团 江湖饭焗 门店照片换成刚上传的图片"
 						),
 					},
 				},
@@ -438,8 +438,8 @@ class FeishuBot:
 							"**账号与状态**\n"
 							"- 登录 美团 江湖饭焗\n"
 							"- 账号列表\n"
-							"- 状态 / 历史 / 指标\n"
-							"- 详情 <任务ID> / 日志 <任务ID>"
+							"- 状态 / 历史\n"
+							"- 门店列表 / 附件"
 						),
 					},
 				},
@@ -450,8 +450,8 @@ class FeishuBot:
 						"tag": "lark_md",
 						"content": (
 							"**图片和表格**\n"
-							"可以先发送图片或表格，系统会记录附件元数据。当前版本暂不直接执行图片/表格修改，"
-							"发送 `附件` 可查看最近上传内容。"
+							"可以先发送图片，系统会记录最近上传内容。发送 `附件` 可查看，"
+							"再发送门店照片替换任务即可使用最近图片。"
 						),
 					},
 				},
@@ -531,10 +531,16 @@ class FeishuBot:
 			AccountStatus.NEEDS_LOGIN.value: "🟡",
 			AccountStatus.DISABLED.value: "🔴",
 		}
+		_STATUS_LABEL = {
+			AccountStatus.ACTIVE.value: "已登录",
+			AccountStatus.NEEDS_LOGIN.value: "需要登录",
+			AccountStatus.DISABLED.value: "已停用",
+		}
 
 		_PLATFORM_NAME = {
 			"meituan": "美团",
 			"douyin": "抖音",
+			"eleme": "饿了么",
 			"taobao": "淘宝",
 		}
 
@@ -553,14 +559,14 @@ class FeishuBot:
 				"tag": "div",
 				"text": {
 					"tag": "lark_md",
-					"content": "暂无已配置的账号。\n点击下方按钮添加。",
+					"content": "暂无已配置的账号。\n发送“登录 <平台> <店铺名>”即可添加。",
 				},
 			})
 		else:
 			for account in accounts:
 				icon = _STATUS_ICON.get(account.status.value, "⚪")
 				platform_display = _PLATFORM_NAME.get(account.platform, account.platform)
-				status_text = account.status.value
+				status_text = _STATUS_LABEL.get(account.status.value, account.status.value)
 
 				# Last used time
 				if account.last_used_at:
@@ -600,16 +606,6 @@ class FeishuBot:
 								"name": account.name,
 							},
 						},
-						{
-							"tag": "button",
-							"text": {"tag": "plain_text", "content": "🗑️ 删除"},
-							"type": "danger",
-							"value": {
-								"action": "account_delete",
-								"account_id": account.id,
-								"name": account.name,
-							},
-						},
 					],
 				})
 
@@ -635,4 +631,3 @@ class FeishuBot:
 		})
 
 		return card
-

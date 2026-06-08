@@ -13,7 +13,8 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 
 from merchant_automation.accounts.manager import AccountManager
-from merchant_automation.accounts.models import AccountStatus
+from merchant_automation.accounts.models import Account, AccountStatus, LoginStatus, PlatformAccount
+from merchant_automation.accounts.store import AccountStore
 from merchant_automation.config import Settings, get_config
 from merchant_automation.feishu.bot import FeishuBot
 from merchant_automation.feishu.client import get_feishu_client
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 LOGIN_WAIT_TIMEOUT_SECONDS = 15 * 60
 LOGIN_CHECK_POLL_SECONDS = 3
 LOGIN_PAGE_TEXT_LIMIT = 3000
+LOGIN_BROWSER_START_TIMEOUT_SECONDS = 60
 
 LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 	'meituan': {
@@ -65,6 +67,18 @@ LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 	},
 }
 
+
+def _ensure_login_browser_start_timeout() -> None:
+	"""Give the visible manual-login browser enough time to launch on slow machines."""
+	for env_var in ('TIMEOUT_BrowserStartEvent', 'TIMEOUT_BrowserLaunchEvent'):
+		raw_value = os.environ.get(env_var)
+		try:
+			current_value = float(raw_value) if raw_value else 0
+		except ValueError:
+			current_value = 0
+		if current_value < LOGIN_BROWSER_START_TIMEOUT_SECONDS:
+			os.environ[env_var] = f'{LOGIN_BROWSER_START_TIMEOUT_SECONDS:g}'
+
 # ---------------------------------------------------------------------------
 # Globals — initialized in lifespan
 # ---------------------------------------------------------------------------
@@ -72,6 +86,7 @@ LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 _config: Settings = None  # type: ignore[assignment]
 _task_queue: TaskQueue = None  # type: ignore[assignment]
 _account_manager: AccountManager = None  # type: ignore[assignment]
+_account_store: AccountStore | None = None
 _feishu_bot: FeishuBot = None  # type: ignore[assignment]
 _resource_downloader: FeishuResourceDownloader = None  # type: ignore[assignment]
 _planning_service: OperationPlanningService = None  # type: ignore[assignment]
@@ -288,7 +303,7 @@ class MerchantTaskExecutor:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-	global _config, _task_queue, _account_manager, _feishu_bot, _resource_downloader
+	global _config, _task_queue, _account_manager, _account_store, _feishu_bot, _resource_downloader
 	global _planning_service, _operation_store, _recipe_store, _pool
 
 	_config = get_config()
@@ -314,8 +329,13 @@ async def lifespan(app: FastAPI):
 	)
 	await _account_manager.start()
 
+	_account_store = AccountStore(db_dir / 'account.db')
+	_account_store.initialize()
+	await _sync_existing_login_accounts()
+
 	# Initialize merchant_automation components
-	_planning_service = OperationPlanningService()
+	llm = _create_llm()
+	_planning_service = OperationPlanningService(llm=llm)
 
 	_operation_store = OperationStore(db_dir / 'merchant.db')
 	_operation_store.initialize()
@@ -327,6 +347,11 @@ async def lifespan(app: FastAPI):
 	from merchant_automation.operations.recipes import RecipeRegistry
 	for recipe in RecipeRegistry.default().recipes:
 		_recipe_store.upsert_recipe(recipe)
+
+	# Seed default recipe definitions
+	from merchant_automation.operations.recipe_definitions import RECIPE_DEFINITIONS
+	for definition in RECIPE_DEFINITIONS.values():
+		_recipe_store.save_definition(definition, source='default')
 
 	# Initialize executor + pool
 	executor = MerchantTaskExecutor(
@@ -618,6 +643,38 @@ async def _handle_card_action_event(event: dict) -> None:
 	if not action_type:
 		return
 
+	if action_type == 'account_login':
+		account_id = value.get('account_id')
+		if not account_id:
+			await _feishu_bot.send_text(chat_id, '未找到要登录的账号，请发送“账号列表”后重试。')
+			return
+		account = await _account_manager.get_account(account_id)
+		if account is None:
+			await _feishu_bot.send_text(chat_id, '账号不存在或已被移除，请发送“账号列表”查看当前账号。')
+			return
+		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
+		await _feishu_bot.send_text(
+			chat_id,
+			f'正在打开 {account.platform}/{account.name} 的登录窗口，请在浏览器中完成登录。',
+		)
+		asyncio.create_task(_execute_login_flow(account.id, chat_id))
+		return
+
+	if action_type == 'account_refresh':
+		await _send_account_card(chat_id)
+		return
+
+	if action_type == 'account_add':
+		await _feishu_bot.send_text(
+			chat_id,
+			'发送“登录 <平台> <店铺名>”即可添加或重新登录账号，例如：登录 美团 江湖饭焗。',
+		)
+		return
+
+	if action_type == 'account_delete':
+		await _feishu_bot.send_text(chat_id, '为避免误删，飞书端暂不直接删除账号。需要停用账号请联系管理员处理。')
+		return
+
 	task_id = value.get('task_id')
 
 	if action_type == 'retry' and task_id:
@@ -642,6 +699,11 @@ async def _handle_card_action_event(event: dict) -> None:
 			await _pool.cancel(task_id)
 		await _feishu_bot.send_text(chat_id, '🛑 已取消')
 		return
+
+
+async def _send_account_card(chat_id: str) -> None:
+	accounts = await _account_manager.get_all_accounts()
+	await _feishu_bot.send_card(chat_id, _feishu_bot.build_account_card(accounts))
 
 
 async def _handle_message_event(event: dict) -> None:
@@ -816,12 +878,86 @@ async def _handle_attachment_message(
 	)
 
 
+def _normalize_command_text(text: str) -> str:
+	return re.sub(r'[\s，。！？?、；;：:,.!`~"“”\'‘’（）()\[\]【】<>《》]+', '', text).lower()
+
+
+def _classify_special_command(text: str) -> str | None:
+	raw = text.strip().lower()
+	compact = _normalize_command_text(text)
+	if raw in ('?', '？') or compact in ('help', '帮助'):
+		return 'help'
+	if any(keyword in compact for keyword in ('帮助', '怎么用', '如何使用', '使用说明', '指令说明')):
+		return 'help'
+	if compact in ('状态', '任务', 'tasks') or any(keyword in compact for keyword in ('任务状态', '任务进度', '排队', '运行中')):
+		return 'status'
+	if compact in ('历史', 'history') or any(keyword in compact for keyword in ('历史记录', '最近记录', '执行记录')):
+		return 'history'
+	if compact in ('账号', '账户', 'accounts') or any(
+		keyword in compact
+		for keyword in ('账号列表', '账户列表', '我的账号', '我的账户', '登录状态', '账号状态', '账户状态')
+	):
+		return 'accounts'
+	if compact in ('附件', '附件列表', 'attachments') or any(
+		keyword in compact
+		for keyword in ('最近附件', '最近图片', '图片列表', '文件列表', '上传内容')
+	):
+		return 'attachments'
+	if _is_store_management_command(compact):
+		return 'stores'
+	return None
+
+
+def _is_store_management_command(compact: str) -> bool:
+	if compact in ('门店', '店铺', 'stores'):
+		return True
+	query_phrases = (
+		'门店列表',
+		'店铺列表',
+		'我的门店',
+		'我的店铺',
+		'查看门店',
+		'查看店铺',
+		'门店管理',
+		'店铺管理',
+		'门店信息',
+		'店铺信息',
+	)
+	if compact not in query_phrases and not any(compact.startswith(prefix) for prefix in ('查看门店', '查看店铺')):
+		return False
+	operation_keywords = (
+		'改',
+		'修改',
+		'更改',
+		'变更',
+		'设置',
+		'设为',
+		'换成',
+		'上传',
+		'电话',
+		'营业时间',
+		'照片',
+		'图片',
+		'地址',
+		'名称',
+		'公告',
+		'简介',
+	)
+	return not any(keyword in compact for keyword in operation_keywords)
+
+
 async def _handle_special_command(text: str, user_id: str, chat_id: str, message_id: str) -> bool:
-	if text in ('帮助', 'help', '?', '？'):
+	# 登录命令处理
+	if await _handle_login_command(text, user_id, chat_id, message_id):
+		return True
+
+	command = _classify_special_command(text)
+
+	if command == 'help':
 		await _feishu_bot.reply_card(message_id, _feishu_bot.build_help_card())
 		return True
 
-	if text in ('状态', '任务', 'tasks'):
+	if command == 'status':
 		pending = await _task_queue.get_pending_tasks()
 		running = _pool.get_running_task_ids() if _pool else []
 		if not pending and not running:
@@ -833,15 +969,43 @@ async def _handle_special_command(text: str, user_id: str, chat_id: str, message
 			await _feishu_bot.reply_text(message_id, '\n'.join(lines))
 		return True
 
-	if text in ('历史', 'history'):
-		await _feishu_bot.reply_text(message_id, '📋 历史功能开发中，请访问 Dashboard: /dashboard')
+	if command == 'history':
+		await _feishu_bot.reply_text(
+			message_id,
+			'历史记录正在整理中。可以发送“状态”查看当前任务进度，任务完成后飞书卡片会同步更新结果。',
+		)
 		return True
 
-	# 登录命令处理
-	if await _handle_login_command(text, user_id, chat_id, message_id):
+	if command == 'accounts':
+		accounts = await _account_manager.get_all_accounts()
+		await _feishu_bot.reply_card(message_id, _feishu_bot.build_account_card(accounts))
+		return True
+
+	if command == 'stores':
+		await _reply_store_management(message_id)
+		return True
+
+	if command == 'attachments':
+		attachments = await _task_queue.get_recent_attachments(chat_id=chat_id, user_id=user_id, limit=5)
+		await _feishu_bot.reply_card(message_id, _feishu_bot.build_attachment_card(attachments))
 		return True
 
 	return False
+
+
+async def _reply_store_management(message_id: str) -> None:
+	accounts = await _account_manager.get_all_accounts()
+	lines = ['门店信息会跟随账号登录和任务绑定逐步完善。']
+	if accounts:
+		lines.append('当前已配置账号：')
+		for account in accounts[:5]:
+			platform = getattr(account, 'platform', '平台')
+			name = getattr(account, 'name', '未命名账号')
+			lines.append(f'• {platform}/{name}')
+	else:
+		lines.append('当前还没有已配置账号。')
+	lines.append('可以发送“账号列表”查看登录状态，或发送“登录 美团 <店铺名>”添加门店账号。')
+	await _feishu_bot.reply_text(message_id, '\n'.join(lines))
 
 
 async def _handle_login_command(text: str, user_id: str, chat_id: str, message_id: str) -> bool:
@@ -873,9 +1037,10 @@ async def _handle_login_command(text: str, user_id: str, chat_id: str, message_i
 	accounts = [account for account in accounts if account.platform == platform]
 	if accounts:
 		account = accounts[0]
-		await _account_manager.update_status(account.id, AccountStatus.NEEDS_LOGIN)
+		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 	else:
 		account = await _account_manager.create_account(name=store_name, platform=platform)
+		_sync_account_store(account, AccountStatus.NEEDS_LOGIN)
 
 	await _feishu_bot.reply_text(
 		message_id,
@@ -902,10 +1067,12 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 	session: BrowserSession | None = None
 	should_close_session = False
 	try:
+		_ensure_login_browser_start_timeout()
 		profile = BrowserProfile(
 			headless=False,
 			user_data_dir=account.profile_dir,
 			window_size={'width': 1280, 'height': 900},
+			enable_default_extensions=False,
 		)
 		session = BrowserSession(browser_profile=profile)
 		await session.start()
@@ -926,10 +1093,10 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 
 		if login_success:
 			should_close_session = True
-			await _account_manager.update_status(account_id, AccountStatus.ACTIVE)
+			await _update_login_account_status(account, AccountStatus.ACTIVE)
 			await _feishu_bot.send_text(chat_id, f'✅ {account.name} 登录成功，登录态已保存。')
 		else:
-			await _account_manager.update_status(account_id, AccountStatus.NEEDS_LOGIN)
+			await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 			await _feishu_bot.send_text(
 				chat_id,
 				f'⚠️ {account.name} 暂未检测到登录成功，浏览器窗口已保留。\n'
@@ -938,7 +1105,7 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 
 	except Exception as e:
 		logger.exception('Login flow failed')
-		await _account_manager.update_status(account_id, AccountStatus.NEEDS_LOGIN)
+		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 		await _feishu_bot.send_text(chat_id, f'❌ 登录失败: {str(e)[:100]}')
 	finally:
 		if session is not None and should_close_session:
@@ -1019,6 +1186,42 @@ def _login_url_for_platform(platform: str) -> str:
 	return login_urls.get(platform, 'https://e.waimai.meituan.com/')
 
 
+async def _update_login_account_status(account: Account, status: AccountStatus) -> None:
+	await _account_manager.update_status(account.id, status)
+	_sync_account_store(account, status)
+
+
+async def _sync_existing_login_accounts() -> None:
+	if _account_store is None:
+		return
+
+	for account in await _account_manager.get_all_accounts():
+		_sync_account_store(account, account.status)
+
+
+def _sync_account_store(account: Account, status: AccountStatus) -> None:
+	if _account_store is None:
+		return
+
+	_account_store.upsert_account(
+		PlatformAccount(
+			account_id=account.id,
+			platform=account.platform,
+			username=getattr(account, 'username', None) or account.name,
+			profile_path=account.profile_dir,
+			login_status=_to_login_status(status),
+		)
+	)
+
+
+def _to_login_status(status: AccountStatus) -> LoginStatus:
+	if status == AccountStatus.ACTIVE:
+		return LoginStatus.LOGGED_IN
+	if status == AccountStatus.NEEDS_LOGIN:
+		return LoginStatus.EXPIRED
+	return LoginStatus.UNKNOWN
+
+
 def _create_llm():
 	from browser_use.llm.openai.chat import ChatOpenAI
 
@@ -1035,12 +1238,13 @@ def _create_llm():
 
 def _mount_dashboard():
 	"""Mount the merchant_automation dashboard routes."""
-	from merchant_automation.accounts.store import AccountStore
 	from merchant_automation.dashboard.routes import create_dashboard_router
 
 	db_dir = Path(_config.TASK_DB_PATH).parent if _config else Path('.')
-	account_store = AccountStore(db_dir / 'account.db')
-	account_store.initialize()
+	account_store = _account_store
+	if account_store is None:
+		account_store = AccountStore(db_dir / 'account.db')
+		account_store.initialize()
 
 	router = create_dashboard_router(
 		_operation_store,
@@ -1078,5 +1282,3 @@ if __name__ == '__main__':
 
 	port = int(os.environ.get('PORT', get_config().SERVER_PORT))
 	uvicorn.run('merchant_automation.server:app', host='0.0.0.0', port=port, reload=False)
-
-

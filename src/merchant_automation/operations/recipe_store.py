@@ -160,6 +160,33 @@ class RecipeStore:
 				(definition.recipe_id, _dump_model(definition), source, created_at, now),
 			)
 
+	def seed_default_definitions(self) -> int:
+		"""Backfill built-in RecipeDefinitions without overwriting existing rows."""
+		from merchant_automation.operations.recipe_definitions import builtin_recipe_definitions
+
+		inserted = 0
+		now = _now()
+		defaults = builtin_recipe_definitions()
+
+		with self._connection() as connection:
+			rows = connection.execute('SELECT recipe_id FROM recipe_definitions').fetchall()
+			existing_recipe_ids = {row['recipe_id'] for row in rows}
+
+			for recipe_id, definition in defaults.items():
+				if recipe_id in existing_recipe_ids:
+					continue
+				connection.execute(
+					'''
+					INSERT INTO recipe_definitions (
+						recipe_id, payload_json, source, created_at, updated_at
+					) VALUES (?, ?, ?, ?, ?)
+					''',
+					(recipe_id, _dump_model(definition), 'default', now, now),
+				)
+				inserted += 1
+
+		return inserted
+
 	def get_definition(self, recipe_id: str) -> RecipeDefinition | None:
 		with self._connection() as connection:
 			row = connection.execute(
@@ -216,4 +243,3 @@ def _dump_model(model: BaseModel) -> str:
 
 def _now() -> str:
 	return datetime.now(timezone.utc).isoformat()
-

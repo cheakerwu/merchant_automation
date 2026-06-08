@@ -1,5 +1,8 @@
 ﻿from __future__ import annotations
 
+import asyncio
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from merchant_automation.operations.binder import BindingIssue, BoundOperationTask, JobPlanBinder
@@ -32,12 +35,20 @@ class OperationPlanningService:
 		self,
 		*,
 		parser: OperationParser | None = None,
+		llm: Any | None = None,
 		planner: JobPlanner | None = None,
 		binder: JobPlanBinder | None = None,
 	) -> None:
 		self._parser = parser or OperationParser()
+		self._llm = llm
 		self._planner = planner or JobPlanner()
 		self._binder = binder or JobPlanBinder()
+
+		# Initialize hybrid parser if LLM is available
+		self._hybrid_parser = None
+		if llm:
+			from merchant_automation.operations.llm_parser import HybridParser
+			self._hybrid_parser = HybridParser(llm)
 
 	def plan_text(
 		self,
@@ -46,13 +57,35 @@ class OperationPlanningService:
 		mode: ExecutionMode = ExecutionMode.PARSE_ONLY,
 		policy: CommitPolicy | None = None,
 	) -> OperationPlanningResult:
-		try:
-			task = self._parser.parse_text(text, mode=mode)
-		except OperationParseError as exc:
-			return OperationPlanningResult(
-				plan=JobPlan(source='text', raw_input=text),
-				input_issues=[PlanningInputIssue(source='text', reason=str(exc), raw_input=text)],
-			)
+		# Try hybrid parser first (regex + LLM)
+		if self._hybrid_parser:
+			try:
+				loop = asyncio.get_event_loop()
+				if loop.is_running():
+					# If we're already in an async context, create a new task
+					import concurrent.futures
+					with concurrent.futures.ThreadPoolExecutor() as executor:
+						future = executor.submit(
+							asyncio.run,
+							self._hybrid_parser.parse(text, mode=mode)
+						)
+						task = future.result(timeout=30)
+				else:
+					task = asyncio.run(self._hybrid_parser.parse(text, mode=mode))
+			except Exception as exc:
+				return OperationPlanningResult(
+					plan=JobPlan(source='text', raw_input=text),
+					input_issues=[PlanningInputIssue(source='text', reason=str(exc), raw_input=text)],
+				)
+		else:
+			# Fall back to regex parser
+			try:
+				task = self._parser.parse_text(text, mode=mode)
+			except OperationParseError as exc:
+				return OperationPlanningResult(
+					plan=JobPlan(source='text', raw_input=text),
+					input_issues=[PlanningInputIssue(source='text', reason=str(exc), raw_input=text)],
+				)
 
 		plan = JobPlan(source='text', raw_input=text, tasks=[task])
 		binding = self._binder.bind(plan, policy=policy or CommitPolicy())

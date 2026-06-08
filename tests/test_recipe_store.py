@@ -9,6 +9,7 @@ from merchant_automation.operations.recipe_definition import (
 	RecipeStep,
 	RecipeStepAction,
 )
+from merchant_automation.operations.recipe_definitions import RECIPE_DEFINITIONS
 from merchant_automation.operations.schemas import (
 	ExecutionMode,
 	RecipeMetadata,
@@ -212,3 +213,35 @@ def test_list_definitions_returns_all(store: RecipeStore) -> None:
 	assert len(results) == 3
 	recipe_ids = {d.recipe_id for d in results}
 	assert recipe_ids == {'r-list-1', 'r-list-2', 'r-list-3'}
+
+
+def test_seed_default_definitions_backfills_empty_table(store: RecipeStore) -> None:
+	assert store.list_definitions() == []
+
+	inserted = store.seed_default_definitions()
+
+	assert inserted == len(RECIPE_DEFINITIONS)
+	loaded = {definition.recipe_id: definition for definition in store.list_definitions()}
+	assert set(loaded) == set(RECIPE_DEFINITIONS)
+	assert loaded['meituan.update_store_phone.v1'].steps
+	image_steps = loaded['meituan.update_store_decoration_image.v1'].steps
+	upload_steps = [step for step in image_steps if step.action == RecipeStepAction.UPLOAD]
+	assert upload_steps
+	assert upload_steps[0].value == '{local_image_path}'
+
+
+def test_seed_default_definitions_preserves_existing_definition(store: RecipeStore) -> None:
+	manual_definition = _make_definition(
+		recipe_id='meituan.update_store_phone.v1',
+		steps=[RecipeStep(action=RecipeStepAction.NAVIGATE, url='https://manual.example.com')],
+		entry_url='https://manual.example.com',
+	)
+	store.save_definition(manual_definition, source='manual')
+
+	inserted = store.seed_default_definitions()
+
+	assert inserted == len(RECIPE_DEFINITIONS) - 1
+	loaded = store.get_definition('meituan.update_store_phone.v1')
+	assert loaded is not None
+	assert loaded.entry_url == 'https://manual.example.com'
+	assert loaded.steps[0].url == 'https://manual.example.com'

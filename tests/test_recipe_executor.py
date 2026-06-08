@@ -63,6 +63,37 @@ class FailingMockLLM:
 		return _MockResponse('9999')
 
 
+class _ClickableNode:
+	node_value = '保存'
+	attributes = {}
+	tag_name = 'button'
+	backend_node_id = 123
+
+
+class _StaleClickElement:
+	async def click(self):
+		raise RuntimeError("Failed to click element: {'code': -32000, 'message': 'No node with given id found'}")
+
+
+class _StaleClickPage:
+	async def get_element(self, backend_node_id):
+		return _StaleClickElement()
+
+
+class _StaleClickSession:
+	async def get_browser_state_summary(self, include_screenshot=False):
+		return None
+
+	async def get_selector_map(self):
+		return {1: _ClickableNode()}
+
+	async def get_element_by_index(self, index):
+		return _ClickableNode() if index == 1 else None
+
+	async def must_get_current_page(self):
+		return _StaleClickPage()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -192,6 +223,23 @@ async def test_click_step(phone_page, browser_session):
 
 
 @pytest.mark.asyncio
+async def test_click_wraps_stale_browser_node_as_step_execution_error():
+	"""Stale BrowserUse nodes should surface as StepExecutionError."""
+	recipe = RecipeDefinition(
+		recipe_id='test.recipe.v1',
+		steps=[RecipeStep(action=RecipeStepAction.CLICK, target='保存')],
+	)
+	executor = RecipeStepExecutor(_StaleClickSession(), llm=None)
+	recorder = _make_recorder()
+
+	with pytest.raises(StepExecutionError) as exc_info:
+		await executor.execute(recipe, params={}, recorder=recorder)
+
+	assert '点击元素失败' in str(exc_info.value)
+	assert 'No node with given id found' in str(exc_info.value)
+
+
+@pytest.mark.asyncio
 async def test_screenshot_step(phone_page, browser_session):
 	"""Screenshot step saves file and records path in trace."""
 	url = phone_page.url_for('/store/settings')
@@ -217,8 +265,8 @@ async def test_screenshot_step(phone_page, browser_session):
 
 
 @pytest.mark.asyncio
-async def test_stop_before_submit(phone_page, browser_session):
-	"""Execution stops at STOP_BEFORE_SUBMIT step."""
+async def test_stop_before_submit_records_prepare_evidence_screenshot(phone_page, browser_session):
+	"""Prepare execution stops before submit and records an evidence screenshot."""
 	url = phone_page.url_for('/store/settings')
 	recipe = RecipeDefinition(
 		recipe_id='test.recipe.v1',
@@ -233,10 +281,35 @@ async def test_stop_before_submit(phone_page, browser_session):
 
 	trace = await executor.execute(recipe, params={}, recorder=recorder)
 
-	# Only navigate + stop_before_submit should execute, not the click
-	assert len(trace.steps) == 2
+	# Navigate + stop_before_submit + evidence screenshot should execute, not the click.
+	assert len(trace.steps) == 3
 	assert trace.steps[1].kind == TraceStepKind.ACTION
 	assert '停在提交前' in trace.steps[1].message
+	assert trace.steps[2].kind == TraceStepKind.SCREENSHOT
+	assert trace.steps[2].screenshot_path is not None
+	assert trace.steps[2].screenshot_path.endswith('.png')
+
+
+@pytest.mark.asyncio
+async def test_commit_mode_skips_stop_before_submit(phone_page, browser_session):
+	"""COMMIT mode skips STOP_BEFORE_SUBMIT and continues to the save action."""
+	url = phone_page.url_for('/store/settings')
+	recipe = RecipeDefinition(
+		recipe_id='test.recipe.v1',
+		steps=[
+			RecipeStep(action=RecipeStepAction.NAVIGATE, url=url),
+			RecipeStep(action=RecipeStepAction.STOP_BEFORE_SUBMIT),
+			RecipeStep(action=RecipeStepAction.CLICK, target='保存'),
+		],
+	)
+	executor = RecipeStepExecutor(browser_session, llm=MockLLM())
+	recorder = _make_recorder()
+
+	trace = await executor.execute(recipe, params={}, recorder=recorder, mode=ExecutionMode.COMMIT)
+
+	assert len(trace.steps) == 2
+	assert trace.steps[1].kind == TraceStepKind.ACTION
+	assert trace.steps[1].target == '保存'
 
 
 @pytest.mark.asyncio
