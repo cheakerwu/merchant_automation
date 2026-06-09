@@ -74,7 +74,7 @@ class AccountManager:
 
 	def __init__(self, db_path: str = "tasks.db", profiles_base_dir: str | None = None) -> None:
 		self._db_path = db_path
-		self._profiles_base = Path(profiles_base_dir) if profiles_base_dir else Path.home() / ".merchant-automation" / "profiles"
+		self._profiles_base = Path(profiles_base_dir).expanduser() if profiles_base_dir else Path.home() / ".merchant-automation" / "profiles"
 		self._db: aiosqlite.Connection | None = None
 		self._started = False
 

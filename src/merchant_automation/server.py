@@ -46,6 +46,24 @@ LOGIN_CHECK_POLL_SECONDS = 3
 LOGIN_PAGE_TEXT_LIMIT = 3000
 LOGIN_BROWSER_START_TIMEOUT_SECONDS = 60
 
+# Auto-retry: retry once on transient execution failures
+AUTO_RETRY_MAX_ATTEMPTS = 2  # total attempts (1 initial + 1 retry)
+AUTO_RETRY_DELAY_SECONDS = 5
+AUTO_RETRYABLE_ERROR_TYPES = frozenset({
+    'recipe_execution_failed',
+    'execution_error',
+    'pool_execution_failed',
+})
+
+# Task hard timeout: cancel tasks running longer than this
+TASK_HARD_TIMEOUT_SECONDS = 5 * 60
+
+# Stale task recovery: mark EXECUTING tasks older than this as FAILED on startup
+STALE_TASK_TIMEOUT_SECONDS = 10 * 60
+
+# Webhook dedup: ignore duplicate message_ids within this window
+WEBHOOK_DEDUP_TTL_SECONDS = 600
+
 LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 	'meituan': {
 		'login_url_markers': ('passport.meituan.com', 'epassport.meituan.com', '/login', 'unitivelogin', 'account'),
@@ -67,6 +85,19 @@ LOGIN_DETECTION_RULES: dict[str, dict[str, tuple[str, ...]]] = {
 	},
 }
 
+# Platform internal name -> user-facing Chinese name
+_PLATFORM_DISPLAY_NAME: dict[str, str] = {
+	'meituan': '美团',
+	'eleme': '饿了么',
+	'douyin': '抖音来客',
+	'taobao': '淘宝',
+}
+
+
+def _platform_display(platform: str) -> str:
+	"""Return user-facing platform name."""
+	return _PLATFORM_DISPLAY_NAME.get(platform, platform)
+
 
 def _ensure_login_browser_start_timeout() -> None:
 	"""Give the visible manual-login browser enough time to launch on slow machines."""
@@ -78,6 +109,28 @@ def _ensure_login_browser_start_timeout() -> None:
 			current_value = 0
 		if current_value < LOGIN_BROWSER_START_TIMEOUT_SECONDS:
 			os.environ[env_var] = f'{LOGIN_BROWSER_START_TIMEOUT_SECONDS:g}'
+
+# ---------------------------------------------------------------------------
+# Task execution error types (for auto-retry logic)
+# ---------------------------------------------------------------------------
+
+
+class _RetryableError(Exception):
+	"""Transient failure that can be retried (recipe execution, browser errors)."""
+
+	def __init__(self, message: str, error_type: str) -> None:
+		self.error_type = error_type
+		super().__init__(message)
+
+
+class _NonRetryableError(Exception):
+	"""Permanent failure that should not be retried (planning, no tasks)."""
+
+	def __init__(self, user_message: str, error_type: str) -> None:
+		self.user_message = user_message
+		self.error_type = error_type
+		super().__init__(user_message)
+
 
 # ---------------------------------------------------------------------------
 # Globals — initialized in lifespan
@@ -121,70 +174,100 @@ class MerchantTaskExecutor:
 		self._resource_downloader = resource_downloader
 
 	async def execute(self, task: Task, cancel_event: asyncio.Event | None = None) -> None:
-		"""Execute a task through the merchant_automation pipeline."""
+		"""Execute a task through the merchant_automation pipeline.
+
+		Transient failures (recipe execution, browser errors) are automatically
+		retried once after a short delay. Planning failures are not retried.
+		"""
+		last_error_type: str | None = None
+		last_error: str | None = None
+
+		for attempt in range(AUTO_RETRY_MAX_ATTEMPTS):
+			if attempt > 0:
+				logger.info('Task %s auto-retry attempt %d/%d', task.id, attempt + 1, AUTO_RETRY_MAX_ATTEMPTS)
+				await self._notify(task.chat_id, '🔄 执行遇到问题，正在自动重试...')
+				await asyncio.sleep(AUTO_RETRY_DELAY_SECONDS)
+
+			try:
+				await self._execute_once(task, cancel_event)
+				return  # success
+			except _NonRetryableError as exc:
+				# Planning failures, no_tasks — don't retry
+				await self._set_status(
+					task,
+					TaskStatus.FAILED,
+					error=str(exc),
+					error_type=exc.error_type,
+					error_message_user=exc.user_message,
+					error_message_internal=str(exc),
+				)
+				await self._notify(task.chat_id, exc.user_message)
+				return
+			except _RetryableError as exc:
+				last_error_type = exc.error_type
+				last_error = str(exc)
+				logger.warning('Task %s attempt %d failed (retryable): %s', task.id, attempt + 1, last_error)
+				continue
+			except Exception as exc:
+				last_error_type = 'execution_error'
+				last_error = str(exc)
+				logger.exception('Task %s attempt %d raised unhandled exception', task.id, attempt + 1)
+				continue
+
+		# All retries exhausted
+		from merchant_automation.operations.failure import user_failure_message
+		user_reason = user_failure_message(last_error_type, f'执行异常: {last_error[:100]}' if last_error else None)
+		await self._set_status(
+			task,
+			TaskStatus.FAILED,
+			error=last_error or 'unknown',
+			error_type=last_error_type or 'execution_error',
+			error_message_user=user_reason,
+			error_message_internal=last_error or 'unknown',
+		)
+		await self._notify(task.chat_id, user_reason)
+
+	async def _execute_once(self, task: Task, cancel_event: asyncio.Event | None) -> None:
+		"""Single execution attempt. Raises _RetryableError or _NonRetryableError."""
 		await self._set_status(task, TaskStatus.EXECUTING)
-		await self._notify(task.chat_id, f'🔄 任务 {task.id[:8]} 开始执行...')
+		await self._notify(task.chat_id, '🚀 任务开始执行...')
 
-		try:
-			# Step 1: Plan — parse text into BoundOperationTask
-			policy = CommitPolicy()  # 默认不开启 commit
-			result = self._planning_service.plan_text(
-				task.instruction,
-				policy=policy,
-			)
+		# Step 1: Plan — parse text into BoundOperationTask
+		policy = CommitPolicy()  # 默认不开启 commit
+		result = self._planning_service.plan_text(
+			task.instruction,
+			policy=policy,
+		)
 
-			# Save planning result
-			run_id = self._operation_store.save_planning_result(result)
+		# Save planning result
+		run_id = self._operation_store.save_planning_result(result)
 
-			# Check for planning issues
-			if result.input_issues or result.plan_issues:
-				issues = result.input_issues + result.plan_issues
-				reason = '; '.join(issue.reason for issue in issues[:3])
-				from merchant_automation.operations.failure import user_failure_message
-				user_reason = user_failure_message('planning_failed', f'无法解析指令: {reason}')
-				await self._set_status(
-					task,
-					TaskStatus.FAILED,
-					error=f'解析失败: {reason}',
-					error_type='planning_failed',
-					error_message_user=user_reason,
-					error_message_internal=str(issues),
-				)
-				await self._notify(task.chat_id, user_reason)
-				return
-
-			if not result.bound_tasks:
-				await self._set_status(
-					task,
-					TaskStatus.FAILED,
-					error='无可用任务',
-					error_type='no_tasks',
-					error_message_user='未能生成任何可执行任务',
-					error_message_internal='bound_tasks is empty',
-				)
-				await self._notify(task.chat_id, f'❌ 任务 {task.id[:8]} 未能生成可执行任务')
-				return
-
-			# Step 2: Execute each bound task
-			bound_task = result.bound_tasks[0]  # 单任务场景取第一个
-			attachments = await self._queue.get_task_attachments(task.id)
-			attachments = await self._ensure_local_image_attachments(attachments)
-			bound_task = _hydrate_latest_image_attachment(bound_task, attachments)
-			await self._execute_bound_task(bound_task, task, run_id)
-
-		except Exception as exc:
-			logger.exception('Task %s execution failed', task.id)
+		# Check for planning issues
+		if result.input_issues or result.plan_issues:
+			issues = result.input_issues + result.plan_issues
+			reason = '; '.join(issue.reason for issue in issues[:3])
 			from merchant_automation.operations.failure import user_failure_message
-			user_reason = user_failure_message('execution_error', f'执行异常: {str(exc)[:100]}')
-			await self._set_status(
-				task,
-				TaskStatus.FAILED,
-				error=str(exc),
-				error_type='execution_error',
-				error_message_user=user_reason,
-				error_message_internal=str(exc),
+			user_reason = user_failure_message('planning_failed', f'无法解析指令: {reason}')
+			raise _NonRetryableError(user_reason, 'planning_failed')
+
+		if not result.bound_tasks:
+			# Provide more context if binding issues exist
+			if result.binding_issues:
+				binding_reasons = '; '.join(issue.reason for issue in result.binding_issues[:2])
+				from merchant_automation.operations.failure import user_failure_message
+				detail = user_failure_message('no_tasks', f'任务绑定失败: {binding_reasons}')
+				raise _NonRetryableError(detail, 'no_tasks')
+			raise _NonRetryableError(
+				user_failure_message('no_tasks'),
+				'no_tasks',
 			)
-			await self._notify(task.chat_id, user_reason)
+
+		# Step 2: Execute each bound task
+		bound_task = result.bound_tasks[0]  # 单任务场景取第一个
+		attachments = await self._queue.get_task_attachments(task.id)
+		attachments = await self._ensure_local_image_attachments(attachments)
+		bound_task = _hydrate_latest_image_attachment(bound_task, attachments)
+		await self._execute_bound_task(bound_task, task, run_id)
 
 	async def _ensure_local_image_attachments(self, attachments: list[Attachment]) -> list[Attachment]:
 		"""Download linked Feishu images before browser upload tasks execute."""
@@ -262,24 +345,12 @@ class MerchantTaskExecutor:
 				await self._set_status(task, TaskStatus.COMPLETED)
 				await self._notify(
 					task.chat_id,
-					f'✅ 任务 {task.id[:8]} 执行成功\n'
-					f'操作: {bound_task.task.operation_id}\n'
-					f'平台: {bound_task.task.platform}\n'
-					f'门店: {bound_task.task.store_id}',
+					f'✅ 任务执行成功\n'
+					f'{task.instruction[:50]}',
 				)
 			else:
 				failure_msg = trace.outcome.message if trace.outcome else '未知错误'
-				from merchant_automation.operations.failure import user_failure_message
-				user_reason = user_failure_message('recipe_execution_failed', f'执行失败: {failure_msg}')
-				await self._set_status(
-					task,
-					TaskStatus.FAILED,
-					error=failure_msg,
-					error_type='recipe_execution_failed',
-					error_message_user=user_reason,
-					error_message_internal=failure_msg,
-				)
-				await self._notify(task.chat_id, user_reason)
+				raise _RetryableError(failure_msg, 'recipe_execution_failed')
 
 		finally:
 			try:
@@ -317,8 +388,8 @@ async def lifespan(app: FastAPI):
 	# Initialize Feishu client + bot
 	client = get_feishu_client()
 	_feishu_bot = FeishuBot(client)
-	db_dir = Path(_config.TASK_DB_PATH).parent
-	download_dir = Path(_config.ATTACHMENT_DOWNLOAD_DIR) if _config.ATTACHMENT_DOWNLOAD_DIR else db_dir / 'attachments'
+	db_dir = Path(_config.TASK_DB_PATH).expanduser().parent
+	download_dir = Path(_config.ATTACHMENT_DOWNLOAD_DIR).expanduser() if _config.ATTACHMENT_DOWNLOAD_DIR else db_dir / 'attachments'
 	_resource_downloader = FeishuResourceDownloader(
 		client=LarkFeishuResourceClient(client),
 		storage_dir=download_dir,
@@ -377,6 +448,9 @@ async def lifespan(app: FastAPI):
 	# Mount dashboard
 	_mount_dashboard()
 
+	# Recover stale tasks from previous crash
+	await _recover_stale_tasks()
+
 	# Start background worker
 	worker = asyncio.create_task(_worker_loop(pool))
 
@@ -393,6 +467,30 @@ async def lifespan(app: FastAPI):
 	await _task_queue.close()
 	await _account_manager.close()
 	logger.info('Merchant server stopped')
+
+
+async def _recover_stale_tasks() -> None:
+	"""Recover tasks stuck in EXECUTING from a previous server crash."""
+	from datetime import datetime, timedelta, timezone
+
+	stale_threshold = datetime.now(timezone.utc) - timedelta(seconds=STALE_TASK_TIMEOUT_SECONDS)
+	stale_tasks = await _task_queue.get_stale_executing_tasks(stale_threshold)
+	for task in stale_tasks:
+		logger.warning('Recovering stale task %s (stuck since %s)', task.id, task.updated_at)
+		await _task_queue.update_status(
+			task.id,
+			TaskStatus.FAILED,
+			error='服务重启，任务中断',
+			error_type='server_restart',
+			error_message_user='服务重启导致任务中断，请重新提交。',
+			error_message_internal=f'stale recovery on startup, was EXECUTING since {task.updated_at}',
+		)
+		try:
+			await _feishu_bot.send_text(task.chat_id, '⚠️ 服务重启，之前的任务已中断，请重新发送指令。')
+		except Exception:
+			logger.warning('Failed to notify stale task recovery for %s', task.id, exc_info=True)
+	if stale_tasks:
+		logger.info('Recovered %d stale tasks on startup', len(stale_tasks))
 
 
 class MerchantTaskExecutorPool:
@@ -424,7 +522,29 @@ class MerchantTaskExecutorPool:
 			account_lock = await self._get_account_lock(account_id)
 			async with account_lock:
 				try:
-					await self._executor.execute(task, cancel_event=cancel_event)
+					await asyncio.wait_for(
+						self._executor.execute(task, cancel_event=cancel_event),
+						timeout=TASK_HARD_TIMEOUT_SECONDS,
+					)
+				except asyncio.TimeoutError:
+					logger.warning('Task %s hard timeout after %ds', task.id, TASK_HARD_TIMEOUT_SECONDS)
+					update_status = getattr(self._task_queue, 'update_status', None)
+					if update_status is not None:
+						try:
+							await update_status(
+								task.id,
+								TaskStatus.FAILED,
+								error=f'执行超时（{TASK_HARD_TIMEOUT_SECONDS}s）',
+								error_type='task_timeout',
+								error_message_user='任务执行超时，请稍后重试或简化操作内容。',
+								error_message_internal=f'hard timeout after {TASK_HARD_TIMEOUT_SECONDS}s',
+							)
+						except Exception:
+							logger.exception('Failed to persist timeout failure for task %s', task.id)
+					try:
+						await _feishu_bot.send_text(task.chat_id, '⏰ 任务执行超时，请稍后重试或简化操作内容。')
+					except Exception:
+						pass
 				except asyncio.CancelledError:
 					logger.info('Task %s was cancelled', task.id)
 				except Exception as exc:
@@ -512,6 +632,30 @@ def _decrypt_feishu_payload(encrypt: str) -> dict:
 	decrypted = decrypted_padded[:-pad_len]
 
 	return json.loads(decrypted.decode('utf-8'))
+
+
+# ---------------------------------------------------------------------------
+# Webhook dedup
+# ---------------------------------------------------------------------------
+
+_seen_message_ids: dict[str, float] = {}  # message_id -> monotonic timestamp
+
+
+def _is_duplicate_message(message_id: str) -> bool:
+	"""Return True if this message_id was already seen within the dedup window."""
+	if not message_id:
+		return False
+	now = asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else 0
+	# Evict stale entries periodically
+	if len(_seen_message_ids) > 1000:
+		cutoff = now - WEBHOOK_DEDUP_TTL_SECONDS
+		stale = [k for k, v in _seen_message_ids.items() if v < cutoff]
+		for k in stale:
+			del _seen_message_ids[k]
+	if message_id in _seen_message_ids:
+		return True
+	_seen_message_ids[message_id] = now
+	return False
 
 
 # ---------------------------------------------------------------------------
@@ -620,10 +764,15 @@ async def feishu_webhook(request: Request) -> Response:
 	logger.info('Feishu event: type=%s', event_type)
 
 	if event_type == 'im.message.receive_v1':
-		try:
-			await _handle_message_event(event)
-		except Exception:
-			logger.exception('Error handling message event')
+		# Dedup: Feishu may resend the same message on network issues
+		msg_id = event.get('message', {}).get('message_id', '')
+		if _is_duplicate_message(msg_id):
+			logger.info('Dropping duplicate message: %s', msg_id)
+		else:
+			try:
+				await _handle_message_event(event)
+			except Exception:
+				logger.exception('Error handling message event')
 
 	elif event_type == 'card.action.trigger':
 		try:
@@ -696,7 +845,7 @@ async def _handle_card_action_event(event: dict) -> None:
 				account_id=task.account_id,
 			)
 			await _task_queue.submit(new_task)
-			await _feishu_bot.send_text(chat_id, f'🔄 任务已重新提交\n新ID: {new_task.id[:8]}')
+			await _feishu_bot.send_text(chat_id, '🔄 任务已重新提交')
 		return
 
 	if action_type == 'cancel' and task_id:
@@ -842,7 +991,7 @@ async def _handle_attachment_message(
 ) -> None:
 	"""Store Feishu image/file attachment metadata for future task execution."""
 	if msg_type not in {'image', 'file'}:
-		await _feishu_bot.reply_text(message_id, '当前仅支持文本、图片和文件消息。')
+		await _feishu_bot.reply_text(message_id, '暂时只支持文字、图片和文件消息哦~\n请发送文本指令、图片或文件。')
 		return
 
 	try:
@@ -866,8 +1015,8 @@ async def _handle_attachment_message(
 		await _task_queue.add_attachment(attachment)
 		await _feishu_bot.reply_text(
 			message_id,
-			f'📎 已记录图片附件：{attachment.id[:8]}\n'
-			f'发送“把美团 <店铺名> 门店照片换成刚上传的图片”即可用于门店照片任务。',
+			'📎 图片已记录！\n'
+			'发送「把美团 <店铺名> 门店照片换成刚上传的图片」即可使用。',
 		)
 		return
 
@@ -886,7 +1035,8 @@ async def _handle_attachment_message(
 	await _task_queue.add_attachment(attachment)
 	await _feishu_bot.reply_text(
 		message_id,
-		f'📎 已记录文件附件：{attachment.file_name or attachment.id[:8]}',
+		f'📎 文件已记录：{attachment.file_name or "未命名文件"}\n'
+		'发送「附件」可查看最近上传的内容。',
 	)
 
 
@@ -957,14 +1107,15 @@ async def _handle_special_command(text: str, user_id: str, chat_id: str, message
 		else:
 			lines = [f'📊 运行中: {len(running)}, 等待中: {len(pending)}']
 			for t in pending[:5]:
-				lines.append(f'  • {t.id[:8]} - {t.instruction[:30]}')
+				instruction_preview = t.instruction[:40] + ('...' if len(t.instruction) > 40 else '')
+				lines.append(f'  • {instruction_preview}')
 			await _feishu_bot.reply_text(message_id, '\n'.join(lines))
 		return True
 
 	if command == 'history':
 		await _feishu_bot.reply_text(
 			message_id,
-			'历史记录正在整理中。可以发送“状态”查看当前任务进度，任务完成后飞书卡片会同步更新结果。',
+			'暂不支持查看历史记录。\n任务完成后飞书卡片会同步更新结果，也可发送「状态」查看当前进度。',
 		)
 		return True
 
@@ -1036,7 +1187,7 @@ async def _handle_login_command(text: str, user_id: str, chat_id: str, message_i
 
 	await _feishu_bot.reply_text(
 		message_id,
-		f'🔐 正在打开浏览器登录 {platform}/{account.name}...\n'
+		f'🔐 正在打开浏览器登录 {_platform_display(platform)}/{account.name}...\n'
 		f'请在弹出的浏览器窗口中完成登录操作。',
 	)
 
@@ -1072,7 +1223,7 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 
 		await _feishu_bot.send_text(
 			chat_id,
-			f'🔐 已打开 {account.platform}/{account.name} 登录页面。\n'
+			f'🔐 已打开 {_platform_display(account.platform)}/{account.name} 登录页面。\n'
 			f'请在浏览器窗口中完成登录，系统检测到登录成功后会自动关闭窗口。',
 		)
 
@@ -1092,13 +1243,13 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 			await _feishu_bot.send_text(
 				chat_id,
 				f'⚠️ {account.name} 暂未检测到登录成功，浏览器窗口已保留。\n'
-				f'如果你已完成登录，可重新发送任务；如果仍未登录，请继续在窗口中操作或再次发送“登录 {account.platform} {account.name}”。',
+				f'如果你已完成登录，可重新发送任务；如果仍未登录，请继续在窗口中操作或再次发送「登录 {_platform_display(account.platform)} {account.name}」。',
 			)
 
 	except Exception as e:
 		logger.exception('Login flow failed')
 		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
-		await _feishu_bot.send_text(chat_id, f'❌ 登录失败: {str(e)[:100]}')
+		await _feishu_bot.send_text(chat_id, f'❌ {account.name} 登录过程中出现问题，请稍后重试。')
 	finally:
 		if session is not None and should_close_session:
 			try:

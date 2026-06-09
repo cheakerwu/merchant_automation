@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
@@ -237,7 +237,7 @@ class FeishuBot:
 		card: dict = {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": f"任务 {task.id[:8]} · {label}"},
+				"title": {"tag": "plain_text", "content": f"任务 · {label}"},
 				"template": color,
 			},
 			"elements": [],
@@ -246,10 +246,6 @@ class FeishuBot:
 		elements: list[dict] = card["elements"]
 
 		fields: list[dict] = [
-			{
-				"is_short": True,
-				"text": {"tag": "lark_md", "content": f"**任务ID:**\n{task.id[:8]}"},
-			},
 			{
 				"is_short": True,
 				"text": {"tag": "lark_md", "content": f"**平台:**\n{_PLATFORM_NAME.get(task.platform, task.platform)}"},
@@ -417,7 +413,7 @@ class FeishuBot:
 		return {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": "商家后台助手"},
+				"title": {"tag": "plain_text", "content": "📖 商家后台助手 · 操作指南"},
 				"template": "blue",
 			},
 			"elements": [
@@ -426,10 +422,14 @@ class FeishuBot:
 					"text": {
 						"tag": "lark_md",
 						"content": (
-							"**创建任务**\n"
-							"- 美团江湖饭焗修改商家电话为13888888888\n"
-							"- 把美团 江湖饭焗 营业时间改为 09:00-22:00\n"
-							"- 把美团 江湖饭焗 门店照片换成刚上传的图片"
+							"**🏪 门店信息**\n"
+							"- 把美团 <店铺名> 电话改成 13800138000\n"
+							"- 把美团 <店铺名> 地址改成 北京市朝阳区xxx\n"
+							"- 把美团 <店铺名> 店名改成 新名字\n"
+							"- 把美团 <店铺名> 营业时间改为 09:00-22:00\n"
+							"- 把美团 <店铺名> 公告改成 欢迎光临\n"
+							"- 把美团 <店铺名> 简介改成 主营川菜\n"
+							"- 把美团 <店铺名> 门店照片换成刚上传的图片"
 						),
 					},
 				},
@@ -439,11 +439,12 @@ class FeishuBot:
 					"text": {
 						"tag": "lark_md",
 						"content": (
-							"**账号与状态**\n"
-							"- 登录 美团 江湖饭焗\n"
-							"- 账号列表\n"
-							"- 状态 / 历史\n"
-							"- 门店列表 / 附件"
+							"**🍜 商品管理**\n"
+							"- 把美团 <店铺名> 宫保鸡丁价格改成 38\n"
+							"- 把美团 <店铺名> 宫保鸡丁库存改成 100\n"
+							"- 把美团 <店铺名> 宫保鸡丁名称改成 宫保鸡丁（大份）\n"
+							"- 把美团 <店铺名> 宫保鸡丁描述改成 经典川菜\n"
+							"- 把美团 <店铺名> 添加分类 下午茶"
 						),
 					},
 				},
@@ -453,9 +454,36 @@ class FeishuBot:
 					"text": {
 						"tag": "lark_md",
 						"content": (
-							"**图片和表格**\n"
-							"可以先发送图片，系统会记录最近上传内容。发送 `附件` 可查看，"
-							"再发送门店照片替换任务即可使用最近图片。"
+							"**🚚 配送管理**\n"
+							"- 把美团 <店铺名> 配送费改成 5 元\n"
+							"- 把美团 <店铺名> 起送价改成 20 元"
+						),
+					},
+				},
+				{"tag": "hr"},
+				{
+					"tag": "div",
+					"text": {
+						"tag": "lark_md",
+						"content": (
+							"**🔐 账号与系统**\n"
+							"- 登录 美团 <店铺名>　→ 添加/重新登录账号\n"
+							"- 账号列表　→ 查看所有账号状态\n"
+							"- 状态　→ 查看当前任务进度\n"
+							"- 附件　→ 查看最近上传的图片"
+						),
+					},
+				},
+				{"tag": "hr"},
+				{
+					"tag": "div",
+					"text": {
+						"tag": "lark_md",
+						"content": (
+							"**💡 使用技巧**\n"
+							"- 先发图片，再发「把XX门店照片换成刚上传的图片」即可替换\n"
+							"- 指令写不清？直接用自然语言描述，AI 会尝试理解\n"
+							"- 以上示例以美团为例，饿了么、抖音来客操作方式相同"
 						),
 					},
 				},
@@ -467,7 +495,7 @@ class FeishuBot:
 		card: dict = {
 			"config": {"wide_screen_mode": True},
 			"header": {
-				"title": {"tag": "plain_text", "content": "最近附件"},
+				"title": {"tag": "plain_text", "content": "\U0001f4ce 最近附件"},
 				"template": "blue",
 			},
 			"elements": [],
@@ -483,11 +511,11 @@ class FeishuBot:
 		lines = ["**最近上传内容**"]
 		for attachment in attachments:
 			created_at = attachment.created_at.strftime("%Y-%m-%d %H:%M")
-			name = attachment.file_name or attachment.id[:8]
+			name = attachment.file_name or "未命名文件"
 			file_type = "图片" if attachment.file_type == "image" else "文件"
 			size = f" / {self._format_size(attachment.size_bytes)}" if attachment.size_bytes else ""
 			lines.append(
-				f"- {file_type}: {name}{size} / {created_at} / ID {attachment.id[:8]}"
+				f"- {file_type}: {name}{size} / {created_at}"
 			)
 		elements.append({"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(lines)}})
 		elements.append({"tag": "hr"})
@@ -563,7 +591,7 @@ class FeishuBot:
 				"tag": "div",
 				"text": {
 					"tag": "lark_md",
-					"content": "暂无已配置的账号。\n发送“登录 <平台> <店铺名>”即可添加。",
+					"content": "暂无已配置的账号。\n发送「登录 <平台> <店铺名>」即可添加。",
 				},
 			})
 		else:

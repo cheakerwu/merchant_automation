@@ -621,6 +621,20 @@ class TaskQueue:
 			rows = await cursor.fetchall()
 			return [_row_to_task(row) for row in rows]
 
+	async def get_stale_executing_tasks(self, stale_threshold: datetime) -> list[Task]:
+		"""Return tasks stuck in EXECUTING status before the given threshold.
+
+		Used on startup to recover tasks that were interrupted by a server crash.
+		"""
+		self._ensure_started()
+		assert self._db is not None
+
+		threshold_iso = stale_threshold.isoformat()
+		sql = "SELECT * FROM tasks WHERE status = ? AND updated_at < ?"
+		async with self._db.execute(sql, (TaskStatus.EXECUTING.value, threshold_iso)) as cursor:
+			rows = await cursor.fetchall()
+			return [_row_to_task(row) for row in rows]
+
 	async def cancel(self, task_id: str) -> bool:
 		"""Cancel a task. Returns True if the task was cancelled."""
 		task = await self.get_task(task_id)

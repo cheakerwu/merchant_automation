@@ -135,7 +135,7 @@ def test_latest_image_param_is_replaced_with_bound_attachment():
 		file_type='image',
 		file_name='store-front.png',
 		feishu_file_key='img_v3_abc',
-		local_path='D:\\attachments\\store-front.png',
+		local_path='/tmp/attachments/store-front.png',
 		sha256='abc123',
 	)
 
@@ -144,5 +144,5 @@ def test_latest_image_param_is_replaced_with_bound_attachment():
 	assert hydrated.task.params['attachment_id'] == 'att-1'
 	assert hydrated.task.params['feishu_file_key'] == 'img_v3_abc'
 	assert hydrated.task.params['attachment_file_name'] == 'store-front.png'
-	assert hydrated.task.params['local_image_path'] == 'D:\\attachments\\store-front.png'
+	assert hydrated.task.params['local_image_path'] == '/tmp/attachments/store-front.png'
 	assert hydrated.task.params['attachment_sha256'] == 'abc123'

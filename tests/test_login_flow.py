@@ -141,7 +141,7 @@ async def test_login_command_creates_account_and_starts_headful_login(monkeypatc
 	assert account_manager.created == [('江湖饭焗', 'meituan')]
 	assert started == [('acct-created', 'chat-1')]
 	assert bot.replies[0][0] == 'msg-1'
-	assert '正在打开浏览器登录 meituan/江湖饭焗' in bot.replies[0][1]
+	assert '正在打开浏览器登录 美团/江湖饭焗' in bot.replies[0][1]
 	assert len(account_store.upserted) == 1
 	synced = account_store.upserted[0]
 	assert synced.account_id == 'acct-created'

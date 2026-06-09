@@ -102,7 +102,7 @@ async def test_image_attachment_is_stored_with_metadata(monkeypatch):
     assert att.feishu_file_key == 'img_v3_abc123'
     assert att.file_name == 'store-front.png'
     assert att.status == 'stored'
-    assert '已记录图片附件' in bot.replies[0][1]
+    assert '图片已记录' in bot.replies[0][1]
 
 
 @pytest.mark.asyncio
@@ -171,7 +171,7 @@ def test_hydrate_attachment_fills_local_image_path():
         file_type='image',
         file_name='store-front.png',
         feishu_file_key='img_v3_abc',
-        local_path='D:\\attachments\\store-front.png',
+        local_path='/tmp/attachments/store-front.png',
         sha256='abc123',
     )
 
@@ -180,7 +180,7 @@ def test_hydrate_attachment_fills_local_image_path():
     assert hydrated.task.params['attachment_id'] == 'att-1'
     assert hydrated.task.params['feishu_file_key'] == 'img_v3_abc'
     assert hydrated.task.params['attachment_file_name'] == 'store-front.png'
-    assert hydrated.task.params['local_image_path'] == 'D:\\attachments\\store-front.png'
+    assert hydrated.task.params['local_image_path'] == '/tmp/attachments/store-front.png'
     assert hydrated.task.params['attachment_sha256'] == 'abc123'
 
 

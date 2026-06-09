@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
@@ -6,7 +6,23 @@ from merchant_automation.operations.schemas import FailureType
 from merchant_automation.operations.traces import ExecutionTrace, TraceOutcomeStatus
 
 USER_FAILURE_MESSAGES = {
-    "planning_failed": "我还没理解这条指令，请补充店铺和要修改的内容。",
+    "planning_failed": (
+        "我还没理解这条指令。\n\n"
+        "你可以试试这样说：\n"
+        "- 把美团 <店铺名> 电话改成 13800138000\n"
+        "- 把美团 <店铺名> 门店照片换成刚上传的图片\n"
+        "- 把美团 <店铺名> 配送费改成 5 元\n"
+        "- 把美团 <店铺名> 公告改成 欢迎光临\n\n"
+        '也可以发送「帮助」查看所有支持的操作。'
+    ),
+    "no_tasks": (
+        "未能生成可执行任务。\n\n"
+        "可能原因：\n"
+        "- 指令中缺少店铺名称\n"
+        "- 该操作暂不支持\n"
+        "- 格式不太对，请参考上面的示例重新发送\n\n"
+        '发送「帮助」查看支持的操作列表。'
+    ),
     "login_required": "账号需要重新登录。",
     "attachment_missing": "没有找到可用图片，请先上传图片。",
     "attachment_download_failed": "图片下载失败，请重新发送图片。",
