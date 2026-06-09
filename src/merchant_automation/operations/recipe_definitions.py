@@ -1,27 +1,46 @@
-"""Recipe definitions for common operations."""
+"""Recipe definitions for common operations.
+
+All recipes navigate to the merchant homepage first, then click through
+to the target page. Deep-linking to sub-pages causes 404 redirects because
+the merchant backend is a SPA that requires session establishment on the
+home page before navigating to sub-routes.
+"""
 
 from collections.abc import Mapping
 
 from merchant_automation.operations.recipe_definition import RecipeDefinition, RecipeStep, RecipeStepAction
 
+# 美团商家后台首页 — 所有操作从这里开始
+MEITUAN_HOME = 'https://e.waimai.meituan.com/'
+
 RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
     'meituan.update_store_phone.v1': RecipeDefinition(
         recipe_id='meituan.update_store_phone.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+        entry_url=MEITUAN_HOME,
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/account/info',
-                description='导航到门店信息页面',
+                url=MEITUAN_HOME,
+                description='打开美团商家后台首页',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
                 timeout=3,
-                description='等待页面加载',
+                description='等待首页加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
-                target='电话号码输入框或编辑按钮',
+                target='门店设置或门店信息菜单',
+                description='进入门店信息页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店信息页面加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='电话号码或联系电话编辑按钮',
                 description='点击电话号码区域进入编辑状态',
             ),
             RecipeStep(
@@ -54,17 +73,27 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
 
     'meituan.change_business_hours.v1': RecipeDefinition(
         recipe_id='meituan.change_business_hours.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+        entry_url=MEITUAN_HOME,
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/account/info',
-                description='导航到门店信息页面',
+                url=MEITUAN_HOME,
+                description='打开美团商家后台首页',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
                 timeout=3,
-                description='等待页面加载',
+                description='等待首页加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店设置或门店信息菜单',
+                description='进入门店信息页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店信息页面加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
@@ -97,12 +126,27 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
 
     'meituan.update_store_name.v1': RecipeDefinition(
         recipe_id='meituan.update_store_name.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+        entry_url=MEITUAN_HOME,
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/account/info',
-                description='导航到门店信息页面',
+                url=MEITUAN_HOME,
+                description='打开美团商家后台首页',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待首页加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店设置或门店信息菜单',
+                description='进入门店信息页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店信息页面加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
@@ -129,20 +173,30 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
 
     'meituan.update_store_decoration_image.v1': RecipeDefinition(
         recipe_id='meituan.update_store_decoration_image.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/decorate',
+        entry_url=MEITUAN_HOME,
         page_variant='2026-06',
         verified_at='2026-06-08',
         verified_account_id='system',
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/decorate',
-                description='导航到门店装修页面',
+                url=MEITUAN_HOME,
+                description='打开美团商家后台首页',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
                 timeout=3,
-                description='等待页面加载',
+                description='等待首页加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店设置或门店装修菜单',
+                description='进入门店装修页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店装修页面加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
@@ -167,21 +221,6 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
             RecipeStep(
                 action=RecipeStepAction.STOP_BEFORE_SUBMIT,
                 description='停在保存前',
-            ),
-            RecipeStep(
-                action=RecipeStepAction.CLICK,
-                target='保存按钮',
-                description='保存门店照片',
-            ),
-            RecipeStep(
-                action=RecipeStepAction.WAIT,
-                timeout=3,
-                description='等待保存完成',
-            ),
-            RecipeStep(
-                action=RecipeStepAction.VERIFY,
-                target='页面提示',
-                description='验证是否显示保存成功',
             ),
         ],
         verify_after_commit=['保存成功', '修改成功', '上传成功'],
