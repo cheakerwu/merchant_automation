@@ -30,7 +30,11 @@ def test_table_rows_become_operation_tasks():
 	assert result.plan.tasks[0].mode == ExecutionMode.PREPARE
 	assert result.plan.tasks[0].params == {'phone': '13800138000'}
 	assert result.plan.tasks[1].store_id == 'B店'
-	assert result.plan.tasks[1].params == {'business_hours': '09:00-22:00'}
+	assert result.plan.tasks[1].params == {
+		'business_hours': '09:00-22:00',
+		'start_time': '09:00',
+		'end_time': '22:00',
+	}
 
 
 def test_row_failure_does_not_stop_batch():

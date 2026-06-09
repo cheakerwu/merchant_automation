@@ -18,6 +18,18 @@ PLATFORM_ALIASES = {
 PLATFORM_PATTERN = r'美团外卖|美团|饿了么|抖音来客|抖音|meituan|eleme|douyin'
 
 
+def derive_business_hours_params(hours: str) -> dict[str, object]:
+	normalized = re.sub(r'\s+', '', hours)
+	match = re.fullmatch(r'(?P<start>\d{1,2}:\d{2})-(?P<end>\d{1,2}:\d{2})', normalized)
+	if not match:
+		return {'business_hours': normalized}
+	return {
+		'business_hours': normalized,
+		'start_time': match.group('start'),
+		'end_time': match.group('end'),
+	}
+
+
 class OperationParseError(ValueError):
 	"""Raised when text cannot be parsed into a supported operation."""
 
@@ -160,12 +172,11 @@ class OperationParser:
 		if platform is None:
 			return None
 
-		hours = re.sub(r'\s+', '', match.group('hours'))
 		return OperationTask(
 			platform=platform,
 			store_id=match.group('store'),
 			operation_id='change_business_hours',
-			params={'business_hours': hours},
+			params=derive_business_hours_params(match.group('hours')),
 			mode=mode,
 		)
 

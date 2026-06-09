@@ -72,6 +72,7 @@ _TASK_COLUMN_MIGRATIONS: dict[str, str] = {
 	"error_type": "ALTER TABLE tasks ADD COLUMN error_type TEXT",
 	"error_message_user": "ALTER TABLE tasks ADD COLUMN error_message_user TEXT",
 	"error_message_internal": "ALTER TABLE tasks ADD COLUMN error_message_internal TEXT",
+	"progress_message": "ALTER TABLE tasks ADD COLUMN progress_message TEXT",
 }
 
 _CREATE_TASK_EVENTS_TABLE_SQL = """
@@ -466,6 +467,18 @@ class TaskQueue:
 			)
 		)
 		await self._db.commit()
+
+	async def update_progress(self, task_id: str, progress_message: str) -> None:
+		"""Update the progress message for a task."""
+		self._ensure_started()
+		assert self._db is not None
+		now = datetime.now().isoformat()
+		await self._db.execute(
+			_UPDATE_FIELD_SQL.format(col="progress_message"),
+			(progress_message, now, task_id),
+		)
+		await self._db.commit()
+		logger.debug("Task %s progress updated: %s", task_id, progress_message)
 
 	async def set_task_card_message_id(self, task_id: str, message_id: str) -> None:
 		"""Persist the Feishu message id for the task card."""

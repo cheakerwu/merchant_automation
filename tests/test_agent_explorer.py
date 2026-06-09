@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -202,3 +203,42 @@ def test_explorer_returns_failure_trace_on_exception(mock_agent_class, mock_brow
 	assert trace.outcome.status == TraceOutcomeStatus.FAILED
 	assert trace.outcome.failure_type == FailureType.SUBMIT_FAILED
 	assert 'browser crashed' in trace.outcome.message
+
+
+@patch('merchant_automation.operations.explorer.Agent')
+def test_explorer_returns_failure_trace_when_agent_done_reports_failure(
+	mock_agent_class,
+	mock_browser_session,
+	mock_llm,
+	sample_operation,
+	sample_bound_task,
+):
+	mock_agent = MagicMock()
+	mock_agent_class.return_value = mock_agent
+	result = SimpleNamespace(
+		all_results=[
+			SimpleNamespace(
+				is_done=True,
+				success=False,
+				judgement=SimpleNamespace(
+					failure_reason='无法访问后台系统，localhost 拒绝连接',
+					impossible_task=True,
+					reached_captcha=False,
+				),
+				extracted_content='任务未完成',
+				error=None,
+			)
+		]
+	)
+	mock_agent.run = AsyncMock(return_value=result)
+
+	recorder = TraceRecorder.start(sample_bound_task)
+	explorer = AgentExplorer(mock_browser_session, mock_llm)
+
+	trace = asyncio.run(
+		explorer.explore(sample_operation, {'phone': '13800138000'}, recorder)
+	)
+
+	assert trace.outcome.status == TraceOutcomeStatus.FAILED
+	assert trace.outcome.failure_type == FailureType.SUBMIT_FAILED
+	assert 'localhost 拒绝连接' in trace.outcome.message

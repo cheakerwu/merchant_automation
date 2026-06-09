@@ -1,7 +1,10 @@
 ﻿from __future__ import annotations
 
+import asyncio
 import tempfile
+from collections.abc import Callable, Coroutine
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +50,10 @@ class TraceOutcome(BaseModel):
 	failed_step_number: int | None = None
 
 
+# Type for async step callback
+StepCallback = Callable[[TraceStep], Coroutine[Any, Any, None]]
+
+
 class ExecutionTrace(BaseModel):
 	model_config = ConfigDict(extra='forbid')
 
@@ -62,11 +69,18 @@ class ExecutionTrace(BaseModel):
 
 
 class TraceRecorder:
-	def __init__(self, trace: ExecutionTrace) -> None:
+	def __init__(self, trace: ExecutionTrace, on_step_callback: StepCallback | None = None) -> None:
 		self.trace = trace
+		self._on_step_callback = on_step_callback
 
 	@classmethod
-	def start(cls, bound_task: BoundOperationTask, *, raw_input: str | None = None) -> TraceRecorder:
+	def start(
+		cls,
+		bound_task: BoundOperationTask,
+		*,
+		raw_input: str | None = None,
+		on_step_callback: StepCallback | None = None,
+	) -> TraceRecorder:
 		return cls(
 			ExecutionTrace(
 				platform=bound_task.task.platform,
@@ -76,7 +90,8 @@ class TraceRecorder:
 				mode=bound_task.task.mode,
 				params=bound_task.task.params,
 				raw_input=raw_input,
-			)
+			),
+			on_step_callback=on_step_callback,
 		)
 
 	def record_step(
@@ -87,6 +102,16 @@ class TraceRecorder:
 	) -> TraceStep:
 		step = TraceStep(step_number=len(self.trace.steps) + 1, kind=kind, message=message, **kwargs)
 		self.trace.steps.append(step)
+
+		# 触发回调（异步）
+		if self._on_step_callback:
+			try:
+				loop = asyncio.get_running_loop()
+				loop.create_task(self._on_step_callback(step))
+			except RuntimeError:
+				# 没有运行的事件循环，跳过回调
+				pass
+
 		return step
 
 	def complete(self, message: str) -> ExecutionTrace:

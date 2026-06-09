@@ -16,7 +16,7 @@ from merchant_automation.operations.recipe_definitions import merge_recipe_defin
 from merchant_automation.operations.recipe_store import RecipeStore
 from merchant_automation.operations.schemas import ExecutionMode, FailureType, RecipeMetadata, RecipeStatus
 from merchant_automation.operations.storage import OperationStore
-from merchant_automation.operations.traces import ExecutionTrace, TraceOutcomeStatus, TraceRecorder
+from merchant_automation.operations.traces import ExecutionTrace, StepCallback, TraceOutcomeStatus, TraceRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,9 @@ class ExecutionRouter:
 		bound_task: BoundOperationTask,
 		raw_input: str | None = None,
 		max_steps: int = 30,
+		on_step_callback: StepCallback | None = None,
 	) -> ExecutionTrace:
-		recorder = TraceRecorder.start(bound_task, raw_input=raw_input)
+		recorder = TraceRecorder.start(bound_task, raw_input=raw_input, on_step_callback=on_step_callback)
 
 		# parse_only: 只解析不执行
 		if bound_task.task.mode == ExecutionMode.PARSE_ONLY:
@@ -88,12 +89,15 @@ class ExecutionRouter:
 					failure_type=FailureType.SUBMIT_FAILED,
 					message=f'未知操作: {bound_task.task.operation_id}',
 				)
+			# Get entry_url from recipe definition if available
+			entry_url = recipe_def.entry_url if recipe_def else None
 			trace = await self._explorer.explore(
 				operation,
 				bound_task.task.params,
 				recorder,
 				mode=bound_task.task.mode,
 				max_steps=max_steps,
+				entry_url=entry_url,
 			)
 
 			# 飞轮闭环: 成功探索后自动合成 candidate Recipe

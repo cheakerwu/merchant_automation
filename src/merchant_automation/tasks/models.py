@@ -55,6 +55,7 @@ class Task(BaseModel):
 	error_type: str | None = None
 	error_message_user: str | None = None
 	error_message_internal: str | None = None
+	progress_message: str | None = None  # 当前执行进度描述
 	created_at: datetime = Field(default_factory=datetime.now)
 	updated_at: datetime = Field(default_factory=datetime.now)
 

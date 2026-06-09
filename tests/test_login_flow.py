@@ -181,6 +181,34 @@ async def test_login_command_reuses_existing_account_and_marks_needs_login(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('command', ['重新登录 美团 江湖饭焗', '登陆 美团 江湖饭焗', '登入 美团 江湖饭焗'])
+async def test_login_command_accepts_common_login_aliases(monkeypatch, command: str):
+	bot = FakeFeishuBot()
+	existing = FakeAccount(id='acct-1', name='江湖饭焗', platform='meituan')
+	account_manager = FakeAccountManager(existing=[existing])
+	started: list[tuple[str, str]] = []
+
+	async def fake_login_flow(account_id: str, chat_id: str) -> None:
+		started.append((account_id, chat_id))
+
+	monkeypatch.setattr(server, '_feishu_bot', bot)
+	monkeypatch.setattr(server, '_account_manager', account_manager)
+	monkeypatch.setattr(server, '_execute_login_flow', fake_login_flow)
+
+	handled = await server._handle_login_command(
+		command,
+		user_id='user-1',
+		chat_id='chat-1',
+		message_id='msg-1',
+	)
+	await asyncio.sleep(0)
+
+	assert handled is True
+	assert account_manager.updated[0][0] == 'acct-1'
+	assert started == [('acct-1', 'chat-1')]
+
+
+@pytest.mark.asyncio
 async def test_open_command_reuses_existing_meituan_account(monkeypatch):
 	bot = FakeFeishuBot()
 	existing = FakeAccount(id='acct-1', name='江湖饭焗', platform='meituan')

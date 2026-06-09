@@ -299,6 +299,19 @@ class FeishuBot:
 			}
 		)
 
+		# Show progress if task is executing and has progress message
+		if task.status == TaskStatus.EXECUTING and task.progress_message:
+			elements.append({"tag": "hr"})
+			elements.append(
+				{
+					"tag": "div",
+					"text": {
+						"tag": "lark_md",
+						"content": f"**执行进度:**\n{task.progress_message}",
+					},
+				}
+			)
+
 		if task.result is not None:
 			elements.append({"tag": "hr"})
 			result_label = "成功" if task.result.success else "失败"

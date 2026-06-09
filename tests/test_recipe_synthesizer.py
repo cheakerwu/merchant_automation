@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-import pytest
-
 from merchant_automation.operations.recipe_definition import (
 	RecipeStepAction,
 )
@@ -244,3 +242,42 @@ def test_entry_url_preserved() -> None:
 	)
 
 	assert defn.entry_url == 'https://example.com/login'
+
+
+def test_meituan_generated_shop_deep_link_is_replaced_with_homepage() -> None:
+	history = StubHistory([
+		StubAction('navigate', {'url': 'https://e.waimai.meituan.com/new_fe/shop/account/info'}),
+	])
+
+	defn = synthesize_recipe_definition(history, recipe_id='r1', params={})
+
+	assert defn.steps[0].action == RecipeStepAction.NAVIGATE
+	assert defn.steps[0].url == 'https://e.waimai.meituan.com/'
+	assert defn.steps[0].value == 'https://e.waimai.meituan.com/'
+
+
+def test_localhost_navigation_is_not_synthesized() -> None:
+	history = StubHistory([
+		StubAction('navigate', {'url': 'http://localhost:3000'}),
+		StubAction('navigate', {'url': 'http://127.0.0.1:5173'}),
+		StubAction('navigate', {'url': 'http://127.0.0.2:5173'}),
+		StubAction('navigate', {'url': 'http://[::1]:8080'}),
+		StubAction('navigate', {'url': 'http://0.0.0.0:8080'}),
+	])
+
+	defn = synthesize_recipe_definition(history, recipe_id='r1', params={})
+
+	assert [step.action for step in defn.steps] == [RecipeStepAction.STOP_BEFORE_SUBMIT]
+
+
+def test_localhost_entry_url_is_not_synthesized() -> None:
+	history = StubHistory([])
+
+	defn = synthesize_recipe_definition(
+		history,
+		recipe_id='r1',
+		params={},
+		entry_url='http://localhost:3000/report',
+	)
+
+	assert defn.entry_url is None

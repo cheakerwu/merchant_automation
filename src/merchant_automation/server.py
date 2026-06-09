@@ -24,12 +24,12 @@ from merchant_automation.tasks.queue import TaskQueue
 
 # merchant_automation components
 from merchant_automation.operations.binder import BoundOperationTask
-from merchant_automation.operations.catalog import OperationCatalog
 from merchant_automation.operations.preflight import CommitPolicy
 from merchant_automation.operations.recipe_store import RecipeStore
 from merchant_automation.operations.router import ExecutionRouter
 from merchant_automation.operations.service import OperationPlanningService
 from merchant_automation.operations.storage import OperationStore
+from merchant_automation.operations.traces import trace_screenshot_paths
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -163,6 +163,7 @@ class MerchantTaskExecutor:
 		planning_service: OperationPlanningService,
 		operation_store: OperationStore,
 		recipe_store: RecipeStore,
+		account_manager: AccountManager | None = None,
 		resource_downloader: FeishuResourceDownloader | None = None,
 	) -> None:
 		self._config = config
@@ -171,6 +172,7 @@ class MerchantTaskExecutor:
 		self._planning_service = planning_service
 		self._operation_store = operation_store
 		self._recipe_store = recipe_store
+		self._account_manager = account_manager
 		self._resource_downloader = resource_downloader
 
 	async def execute(self, task: Task, cancel_event: asyncio.Event | None = None) -> None:
@@ -233,9 +235,11 @@ class MerchantTaskExecutor:
 		await self._notify(task.chat_id, '🚀 任务开始执行...')
 
 		# Step 1: Plan — parse text into BoundOperationTask
+		from merchant_automation.operations.schemas import ExecutionMode
 		policy = CommitPolicy()  # 默认不开启 commit
 		result = self._planning_service.plan_text(
 			task.instruction,
+			mode=ExecutionMode.PREPARE,
 			policy=policy,
 		)
 
@@ -296,6 +300,7 @@ class MerchantTaskExecutor:
 		from browser_use import BrowserSession
 		from browser_use.browser.profile import BrowserProfile
 		from browser_use.llm.openai.chat import ChatOpenAI
+		from merchant_automation.operations.traces import TraceStep
 
 		# Resolve account profile
 		profile_dir = None
@@ -313,6 +318,28 @@ class MerchantTaskExecutor:
 
 		profile = BrowserProfile(**profile_kwargs)
 		browser_session = BrowserSession(browser_profile=profile)
+
+		# Progress callback for real-time updates
+		async def on_step_progress(step: TraceStep) -> None:
+			"""Send progress update to Feishu on each step."""
+			# Map step kind to emoji
+			kind_emoji = {
+				'page': '🌐',
+				'action': '🖱️',
+				'screenshot': '📸',
+				'model_judgement': '🧠',
+				'validation': '✅',
+			}
+			emoji = kind_emoji.get(step.kind.value, '📋')
+			progress_msg = f"{emoji} 步骤 {step.step_number}: {step.message}"
+
+			# Update task progress in memory and database
+			task.progress_message = progress_msg
+			try:
+				await self._queue.update_progress(task.id, progress_msg)
+				await self._feishu_bot.update_task_card(task)
+			except Exception as e:
+				logger.debug('Failed to update progress: %s', e)
 
 		try:
 			# Create LLM
@@ -334,8 +361,12 @@ class MerchantTaskExecutor:
 				recipe_store=self._recipe_store,
 			)
 
-			# Execute
-			trace = await router.execute(bound_task, raw_input=task.instruction)
+			# Execute with progress callback
+			trace = await router.execute(
+				bound_task,
+				raw_input=task.instruction,
+				on_step_callback=on_step_progress,
+			)
 
 			# Save trace
 			self._operation_store.save_trace(trace, run_id=run_id)
@@ -343,6 +374,19 @@ class MerchantTaskExecutor:
 			# Report result
 			if trace.outcome and trace.outcome.status.value == 'success':
 				await self._set_status(task, TaskStatus.COMPLETED)
+
+				# Send screenshot if available
+				screenshot_paths = trace_screenshot_paths(trace)
+				if screenshot_paths:
+					try:
+						# Upload and send the first screenshot
+						image_key = await self._feishu_bot.upload_image(screenshot_paths[0])
+						if image_key:
+							await self._feishu_bot.send_image(task.chat_id, image_key)
+							logger.info('Screenshot sent to chat %s', task.chat_id)
+					except Exception as e:
+						logger.warning('Failed to send screenshot: %s', e)
+
 				await self._notify(
 					task.chat_id,
 					f'✅ 任务执行成功\n'
@@ -438,12 +482,13 @@ async def lifespan(app: FastAPI):
 		planning_service=_planning_service,
 		operation_store=_operation_store,
 		recipe_store=_recipe_store,
+		account_manager=_account_manager,
 		resource_downloader=_resource_downloader,
 	)
 
 	# Wrap in a simple pool adapter
 	pool = MerchantTaskExecutorPool(executor=executor, task_queue=_task_queue, max_concurrent=_config.MAX_CONCURRENT_TASKS)
-	_pool_adapter = pool
+	_pool = pool
 
 	# Mount dashboard
 	_mount_dashboard()
@@ -464,6 +509,7 @@ async def lifespan(app: FastAPI):
 	# Shutdown
 	worker.cancel()
 	await pool.shutdown()
+	_pool = None
 	await _task_queue.close()
 	await _account_manager.close()
 	logger.info('Merchant server stopped')
@@ -861,6 +907,61 @@ async def _send_account_card(chat_id: str) -> None:
 	await _feishu_bot.send_card(chat_id, _feishu_bot.build_account_card(accounts))
 
 
+async def _find_account_for_instruction(text: str) -> str | None:
+	"""Find matching account based on store name in instruction.
+
+	Strategy:
+	1. Extract store name from instruction
+	2. Search accounts by store name (fuzzy match)
+	3. If only one account exists on this platform, use it as default
+	4. Otherwise return None (user needs to specify account)
+	"""
+	import re
+
+	if _account_manager is None:
+		return None
+
+	# Extract store name from instruction patterns
+	patterns = [
+		r'(?:把|将)\s*(?:美团外卖|美团|饿了么|抖音来客|抖音)\s*(.+?)\s*(?:电话|地址|名称|公告|简介|营业时间|门店照片|配送费|配送范围|起送价)',
+		r'(?:美团外卖|美团|饿了么|抖音来客|抖音)\s+(.+?)\s+(?:修改|更改|变更)',
+	]
+
+	store_name = None
+	for pattern in patterns:
+		match = re.search(pattern, text)
+		if match:
+			store_name = match.group(1).strip()
+			break
+
+	# Strategy 1: Search by store name
+	if store_name:
+		if hasattr(_account_manager, 'find_account_for_message'):
+			accounts = await _account_manager.find_account_for_message(store_name)
+		elif hasattr(_account_manager, 'search_accounts'):
+			accounts = await _account_manager.search_accounts(store_name)
+		else:
+			accounts = []
+		if accounts:
+			logger.info('Found account for store "%s": %s', store_name, accounts[0].id)
+			return accounts[0].id
+
+	# Strategy 2: If only one account exists on this platform, use it as default
+	all_accounts = await _account_manager.get_all_accounts()
+	if len(all_accounts) == 1:
+		logger.info('Only one account exists, using as default: %s', all_accounts[0].id)
+		return all_accounts[0].id
+
+	# Strategy 3: If multiple accounts, try to match by username containing store name
+	if store_name:
+		for account in all_accounts:
+			if store_name in (account.name or '') or store_name in (account.username or ''):
+				logger.info('Matched account by name/username containing "%s": %s', store_name, account.id)
+				return account.id
+
+	return None
+
+
 async def _handle_message_event(event: dict) -> None:
 	message = event.get('message', {})
 	chat_id = message.get('chat_id', '')
@@ -907,6 +1008,9 @@ async def _handle_message_event(event: dict) -> None:
 		return
 
 	# Create task and submit
+	# Try to find matching account based on store name in instruction
+	account_id = await _find_account_for_instruction(text)
+
 	task = Task(
 		user_id=user_id,
 		chat_id=chat_id,
@@ -914,6 +1018,7 @@ async def _handle_message_event(event: dict) -> None:
 		raw_text=text,
 		platform='meituan',  # TODO: auto-detect from text
 		instruction=text,
+		account_id=account_id,
 	)
 
 	await _task_queue.submit(task)
@@ -1099,6 +1204,10 @@ async def _handle_special_command(text: str, user_id: str, chat_id: str, message
 		await _feishu_bot.reply_card(message_id, _feishu_bot.build_help_card())
 		return True
 
+	if command == 'login_help':
+		await _feishu_bot.reply_card(message_id, _feishu_bot.build_help_card())
+		return True
+
 	if command == 'status':
 		pending = await _task_queue.get_pending_tasks()
 		running = _pool.get_running_task_ids() if _pool else []
@@ -1153,7 +1262,11 @@ async def _reply_store_management(message_id: str) -> None:
 
 async def _handle_login_command(text: str, user_id: str, chat_id: str, message_id: str) -> bool:
 	"""处理登录命令，如：登录美团江湖饭焗"""
-	match = re.match(r'^(?:登录|打开|进入)\s*(?P<platform>美团外卖|美团|饿了么|抖音来客|抖音)\s*(?P<store>.+)$', text)
+	match = re.match(
+		r'^(?:重新登录|重新登陆|重新登入|登录|登陆|登入|打开|进入)\s*'
+		r'(?P<platform>美团外卖|美团|饿了么|抖音来客|抖音)\s*(?P<store>.+)$',
+		text,
+	)
 	if not match:
 		return False
 
@@ -1246,7 +1359,7 @@ async def _execute_login_flow(account_id: str, chat_id: str) -> None:
 				f'如果你已完成登录，可重新发送任务；如果仍未登录，请继续在窗口中操作或再次发送「登录 {_platform_display(account.platform)} {account.name}」。',
 			)
 
-	except Exception as e:
+	except Exception:
 		logger.exception('Login flow failed')
 		await _update_login_account_status(account, AccountStatus.NEEDS_LOGIN)
 		await _feishu_bot.send_text(chat_id, f'❌ {account.name} 登录过程中出现问题，请稍后重试。')

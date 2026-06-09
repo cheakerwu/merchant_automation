@@ -3,15 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 import pytest
 
 from merchant_automation import server
 from merchant_automation.accounts.models import AccountStatus
 from merchant_automation.feishu.bot import FeishuBot
-from merchant_automation.tasks.models import Task, TaskResult, TaskStatus
-from merchant_automation.tasks.queue import TaskQueue
 
 
 @dataclass
@@ -153,6 +150,16 @@ async def test_account_list_phrase_replies_account_card_before_task_submission()
 	card_text = json.dumps(bot.cards[0][1], ensure_ascii=False)
 	assert '账号' in card_text
 	assert '江湖饭焗' in card_text
+
+
+@pytest.mark.asyncio
+async def test_login_help_phrase_replies_help_card_before_task_submission():
+	queue, bot = await _send_text('登录帮助', allow_task_cards=True)
+
+	assert queue.submitted == []
+	assert bot.cards
+	card_text = json.dumps(bot.cards[0][1], ensure_ascii=False)
+	assert '登录 美团 <店铺名>' in card_text
 
 
 @pytest.mark.asyncio

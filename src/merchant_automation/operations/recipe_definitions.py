@@ -4,15 +4,18 @@ from collections.abc import Mapping
 
 from merchant_automation.operations.recipe_definition import RecipeDefinition, RecipeStep, RecipeStepAction
 
+# Correct entry URL for Meituan merchant backend
+MEITUAN_ENTRY_URL = 'https://e.waimai.meituan.com/'
+
 RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
     'meituan.update_store_phone.v1': RecipeDefinition(
         recipe_id='meituan.update_store_phone.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+        entry_url=MEITUAN_ENTRY_URL,
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/account/info',
-                description='导航到门店信息页面',
+                url=MEITUAN_ENTRY_URL,
+                description='导航到美团外卖商家后台首页',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
@@ -21,17 +24,37 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
-                target='电话号码输入框或编辑按钮',
-                description='点击电话号码区域进入编辑状态',
+                target='店铺设置菜单',
+                description='展开店铺设置菜单',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=1,
+                description='等待菜单展开',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店管理子菜单',
+                description='进入门店管理页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店管理页面加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='修改按钮',
+                description='点击修改按钮进入编辑状态',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
                 timeout=2,
-                description='等待编辑框出现',
+                description='等待编辑状态',
             ),
             RecipeStep(
                 action=RecipeStepAction.FILL,
-                target='电话号码输入框',
+                target='餐厅电话输入框',
                 value='{phone}',
                 description='填入新电话号码',
             ),
@@ -54,17 +77,37 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
 
     'meituan.change_business_hours.v1': RecipeDefinition(
         recipe_id='meituan.change_business_hours.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+        entry_url=MEITUAN_ENTRY_URL,
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/account/info',
-                description='导航到门店信息页面',
+                url=MEITUAN_ENTRY_URL,
+                description='导航到美团外卖商家后台首页',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
                 timeout=3,
                 description='等待页面加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='店铺设置菜单',
+                description='展开店铺设置菜单',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=1,
+                description='等待菜单展开',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店管理子菜单',
+                description='进入门店管理页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店管理页面加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
@@ -97,12 +140,37 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
 
     'meituan.update_store_name.v1': RecipeDefinition(
         recipe_id='meituan.update_store_name.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+        entry_url=MEITUAN_ENTRY_URL,
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/account/info',
-                description='导航到门店信息页面',
+                url=MEITUAN_ENTRY_URL,
+                description='导航到美团外卖商家后台首页',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待页面加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='店铺设置菜单',
+                description='展开店铺设置菜单',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=1,
+                description='等待菜单展开',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店管理子菜单',
+                description='进入门店管理页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店管理页面加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,
@@ -129,20 +197,40 @@ RECIPE_DEFINITIONS: dict[str, RecipeDefinition] = {
 
     'meituan.update_store_decoration_image.v1': RecipeDefinition(
         recipe_id='meituan.update_store_decoration_image.v1',
-        entry_url='https://e.waimai.meituan.com/new_fe/shop/decorate',
+        entry_url=MEITUAN_ENTRY_URL,
         page_variant='2026-06',
         verified_at='2026-06-08',
         verified_account_id='system',
         steps=[
             RecipeStep(
                 action=RecipeStepAction.NAVIGATE,
-                url='https://e.waimai.meituan.com/new_fe/shop/decorate',
-                description='导航到门店装修页面',
+                url=MEITUAN_ENTRY_URL,
+                description='导航到美团外卖商家后台首页',
             ),
             RecipeStep(
                 action=RecipeStepAction.WAIT,
                 timeout=3,
                 description='等待页面加载',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='店铺设置菜单',
+                description='展开店铺设置菜单',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=1,
+                description='等待菜单展开',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.CLICK,
+                target='门店装修子菜单',
+                description='进入门店装修页面',
+            ),
+            RecipeStep(
+                action=RecipeStepAction.WAIT,
+                timeout=3,
+                description='等待门店装修页面加载',
             ),
             RecipeStep(
                 action=RecipeStepAction.CLICK,

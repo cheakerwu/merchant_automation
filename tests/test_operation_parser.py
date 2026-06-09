@@ -38,7 +38,11 @@ def test_parse_change_business_hours_from_text():
 	assert task.platform == 'meituan'
 	assert task.store_id == 'A店'
 	assert task.operation_id == 'change_business_hours'
-	assert task.params == {'business_hours': '09:00-22:00'}
+	assert task.params == {
+		'business_hours': '09:00-22:00',
+		'start_time': '09:00',
+		'end_time': '22:00',
+	}
 	assert task.mode == ExecutionMode.PARSE_ONLY
 
 

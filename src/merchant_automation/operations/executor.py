@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 import tempfile
+from urllib.parse import urlparse
 
 from browser_use.browser.session import BrowserSession
 from browser_use.llm.messages import UserMessage
@@ -18,6 +19,31 @@ from merchant_automation.operations.traces import ExecutionTrace, TraceRecorder,
 
 logger = logging.getLogger(__name__)
 
+_NAVIGATION_PROBE_TEXT_LIMIT = 2000
+_LOGIN_URL_MARKERS = (
+	'passport',
+	'epassport',
+	'/login',
+	'unitivelogin',
+	'/signin',
+	'/sso',
+)
+_LOGIN_TEXT_MARKERS = (
+	'账号登录',
+	'手机登录',
+	'密码登录',
+	'扫码登录',
+	'验证码登录',
+	'请输入手机号',
+	'获取验证码',
+)
+_NOT_FOUND_MARKERS = (
+	'404',
+	'页面不存在',
+	'访问的页面不存在',
+	'找不到页面',
+)
+
 
 class StepExecutionError(Exception):
 	"""Recipe step execution failed."""
@@ -26,6 +52,40 @@ class StepExecutionError(Exception):
 		self.step_index = step_index
 		self.step = step
 		super().__init__(message)
+
+
+def _navigation_failure_reason(
+	*,
+	target_url: str,
+	current_url: str,
+	title: str,
+	page_text: str,
+) -> str | None:
+	current_url_lower = current_url.lower()
+	combined = f'{current_url}\n{title}\n{page_text}'.lower()
+
+	if current_url_lower == 'about:blank':
+		return '页面仍停留在 about:blank'
+
+	if any(marker in current_url_lower for marker in _LOGIN_URL_MARKERS):
+		return f'疑似被重定向到登录页: {current_url}'
+
+	if any(marker.lower() in combined for marker in _LOGIN_TEXT_MARKERS):
+		return f'疑似进入登录页: {current_url or target_url}'
+
+	parsed_current = urlparse(current_url)
+	current_path = parsed_current.path.lower()
+	if current_path.rstrip('/') == '/404' or any(marker in combined for marker in _NOT_FOUND_MARKERS):
+		return f'疑似 404/页面不存在: {current_url or target_url}'
+
+	parsed_target = urlparse(target_url)
+	if parsed_target.hostname and parsed_current.hostname:
+		target_host = parsed_target.hostname.lower()
+		current_host = parsed_current.hostname.lower()
+		if target_host.endswith('waimai.meituan.com') and 'meituan' not in current_host:
+			return f'疑似离开目标商家后台: {current_url}'
+
+	return None
 
 
 class RecipeStepExecutor:
@@ -94,7 +154,7 @@ class RecipeStepExecutor:
 		action = step.action
 
 		if action == RecipeStepAction.NAVIGATE:
-			await self._do_navigate(step, params, recorder)
+			await self._do_navigate(step, step_index, params, recorder)
 		elif action == RecipeStepAction.FILL:
 			await self._do_fill(step, step_index, params, recorder)
 		elif action == RecipeStepAction.CLICK:
@@ -122,6 +182,7 @@ class RecipeStepExecutor:
 	async def _do_navigate(
 		self,
 		step: RecipeStep,
+		step_index: int,
 		params: dict[str, object],
 		recorder: TraceRecorder,
 	) -> None:
@@ -129,11 +190,43 @@ class RecipeStepExecutor:
 		if not url:
 			raise StepExecutionError('NAVIGATE 步骤缺少 url', -1, step)
 		await self._session.navigate_to(url)
+		current_url, title, page_text = await self._read_navigation_probe()
 		recorder.record_step(
 			TraceStepKind.PAGE,
 			step.description or f'打开 {url}',
-			url=url,
+			url=current_url or url,
+			page_title=title or None,
 		)
+		failure_reason = _navigation_failure_reason(
+			target_url=url,
+			current_url=current_url,
+			title=title,
+			page_text=page_text,
+		)
+		if failure_reason:
+			raise StepExecutionError(f'导航后页面异常: {failure_reason}', step_index, step)
+
+	async def _read_navigation_probe(self) -> tuple[str, str, str]:
+		current_url = ''
+		title = ''
+		page_text = ''
+		try:
+			current_url = await self._session.get_current_page_url()
+		except Exception:
+			logger.debug('Failed to read current URL after navigation', exc_info=True)
+		try:
+			title = await self._session.get_current_page_title()
+		except Exception:
+			logger.debug('Failed to read current title after navigation', exc_info=True)
+		try:
+			page = await self._session.get_current_page()
+			if page is not None:
+				page_text = await page.evaluate(
+					f'() => ((document.body && document.body.innerText) || "").slice(0, {_NAVIGATION_PROBE_TEXT_LIMIT})'
+				)
+		except Exception:
+			logger.debug('Failed to read current page text after navigation', exc_info=True)
+		return current_url, title, page_text
 
 	async def _do_fill(
 		self,

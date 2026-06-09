@@ -50,8 +50,9 @@ class MerchantTaskExecutor:
         await self._set_status(task, TaskStatus.PARSING)
 
         try:
-            # Step 1: Plan
-            result = await self._planning_service.plan_text(task.instruction, mode=None)
+            # Step 1: Plan — use PREPARE mode to actually execute the operation
+            from merchant_automation.operations.schemas import ExecutionMode
+            result = await self._planning_service.plan_text(task.instruction, mode=ExecutionMode.PREPARE)
 
             if result.input_issues or result.plan_issues:
                 issues = result.input_issues + result.plan_issues

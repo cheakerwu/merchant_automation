@@ -3,7 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from merchant_automation.operations.catalog import OperationCatalog
-from merchant_automation.operations.parser import PLATFORM_ALIASES
+from merchant_automation.operations.parser import PLATFORM_ALIASES, derive_business_hours_params
 from merchant_automation.operations.schemas import ExecutionMode, JobPlan, OperationTask
 
 
@@ -64,6 +64,7 @@ class JobPlanner:
 			if value is None:
 				raise ValueError(f'missing_required_param: {param_name}')
 			params[param_name] = value
+		params = _derive_operation_params(operation_id, params)
 
 		return OperationTask(
 			platform=platform,
@@ -73,6 +74,15 @@ class JobPlanner:
 			params=params,
 			mode=_execution_mode(row),
 		)
+
+
+def _derive_operation_params(operation_id: str, params: dict[str, object]) -> dict[str, object]:
+	if operation_id == 'change_business_hours' and 'business_hours' in params:
+		return {
+			**params,
+			**derive_business_hours_params(str(params['business_hours'])),
+		}
+	return params
 
 
 def _string_value(row: dict[str, object], *keys: str) -> str | None:
@@ -108,4 +118,3 @@ def _execution_mode(row: dict[str, object]) -> ExecutionMode:
 	if mode is None:
 		return ExecutionMode.PARSE_ONLY
 	return ExecutionMode(mode)
-

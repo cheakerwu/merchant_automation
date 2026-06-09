@@ -16,7 +16,7 @@ from merchant_automation.operations.recipe_definition import (
 )
 from merchant_automation.operations.executor import RecipeStepExecutor, StepExecutionError
 from merchant_automation.operations.schemas import ExecutionMode
-from merchant_automation.operations.traces import ExecutionTrace, TraceRecorder, TraceStepKind
+from merchant_automation.operations.traces import TraceRecorder, TraceStepKind
 
 
 # ---------------------------------------------------------------------------
@@ -94,9 +94,37 @@ class _StaleClickSession:
 		return _StaleClickPage()
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+class _ProbePage:
+	def __init__(self, text: str) -> None:
+		self._text = text
+
+	async def evaluate(self, script):
+		return self._text
+
+
+class _RedirectAfterNavigateSession:
+	def __init__(self, current_url: str, title: str, page_text: str) -> None:
+		self.current_url = current_url
+		self.title = title
+		self.page_text = page_text
+		self.navigated_to: list[str] = []
+
+	async def navigate_to(self, url: str) -> None:
+		self.navigated_to.append(url)
+
+	async def get_current_page_url(self) -> str:
+		return self.current_url
+
+	async def get_current_page_title(self) -> str:
+		return self.title
+
+	async def get_current_page(self):
+		return _ProbePage(self.page_text)
+
+
+	# ---------------------------------------------------------------------------
+	# Fixtures
+	# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -172,6 +200,59 @@ async def test_navigate_step(phone_page, browser_session):
 	assert len(trace.steps) == 1
 	assert trace.steps[0].kind == TraceStepKind.PAGE
 	assert url in (trace.steps[0].url or '')
+
+
+@pytest.mark.asyncio
+async def test_navigate_step_fails_when_redirected_to_login_page():
+	"""Recipe replay must stop when a deep link redirects to login."""
+	recipe = RecipeDefinition(
+		recipe_id='test.recipe.v1',
+		steps=[
+			RecipeStep(
+				action=RecipeStepAction.NAVIGATE,
+				url='https://e.waimai.meituan.com/new_fe/shop/account/info',
+			),
+		],
+	)
+	session = _RedirectAfterNavigateSession(
+		current_url='https://passport.meituan.com/account/unitivelogin',
+		title='美团商家登录',
+		page_text='账号登录 手机登录 请输入手机号',
+	)
+	executor = RecipeStepExecutor(session, llm=MockLLM())
+	recorder = _make_recorder()
+
+	with pytest.raises(StepExecutionError) as exc_info:
+		await executor.execute(recipe, params={}, recorder=recorder)
+
+	assert '登录' in str(exc_info.value)
+	assert session.navigated_to == ['https://e.waimai.meituan.com/new_fe/shop/account/info']
+
+
+@pytest.mark.asyncio
+async def test_navigate_step_fails_when_landing_on_404_page():
+	"""Recipe replay must stop before acting on a missing backend page."""
+	recipe = RecipeDefinition(
+		recipe_id='test.recipe.v1',
+		steps=[
+			RecipeStep(
+				action=RecipeStepAction.NAVIGATE,
+				url='https://e.waimai.meituan.com/new_fe/shop/decorate',
+			),
+		],
+	)
+	session = _RedirectAfterNavigateSession(
+		current_url='https://e.waimai.meituan.com/404',
+		title='404 Not Found',
+		page_text='页面不存在',
+	)
+	executor = RecipeStepExecutor(session, llm=MockLLM())
+	recorder = _make_recorder()
+
+	with pytest.raises(StepExecutionError) as exc_info:
+		await executor.execute(recipe, params={}, recorder=recorder)
+
+	assert '404' in str(exc_info.value)
 
 
 @pytest.mark.asyncio

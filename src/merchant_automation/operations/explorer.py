@@ -18,6 +18,26 @@ from merchant_automation.operations.traces import (
 logger = logging.getLogger(__name__)
 
 
+def _agent_failure_message(result: Any) -> str | None:
+	all_results = getattr(result, 'all_results', None)
+	if not all_results:
+		return None
+
+	done_results = [item for item in all_results if getattr(item, 'is_done', False)]
+	final_result = done_results[-1] if done_results else all_results[-1]
+	judgement = getattr(final_result, 'judgement', None)
+	if getattr(final_result, 'success', None) is not False and not getattr(judgement, 'impossible_task', False):
+		return None
+
+	failure_reason = getattr(judgement, 'failure_reason', None) if judgement is not None else None
+	extracted_content = getattr(final_result, 'extracted_content', None)
+	error = getattr(final_result, 'error', None)
+	for candidate in (failure_reason, extracted_content, error, str(result)):
+		if candidate:
+			return str(candidate)
+	return 'Agent 最终判定任务失败'
+
+
 class AgentExplorer:
 	"""用 browser_use.Agent 探索后台，记录执行轨迹。"""
 
@@ -38,9 +58,10 @@ class AgentExplorer:
 		*,
 		mode: ExecutionMode = ExecutionMode.DRY_RUN,
 		max_steps: int = 30,
+		entry_url: str | None = None,
 	) -> ExecutionTrace:
 		"""Agent 自由探索，记录轨迹。"""
-		task_prompt = self._build_task_prompt(operation, params, mode)
+		task_prompt = self._build_task_prompt(operation, params, mode, entry_url=entry_url)
 
 		agent = Agent(
 			task=task_prompt,
@@ -51,7 +72,11 @@ class AgentExplorer:
 			keep_alive=True,  # 保持浏览器打开以便截图
 		)
 
+		# Track the last screenshot step to replace it
+		last_screenshot_step: int | None = None
+
 		async def on_step_end(agent_ref: Any) -> None:
+			nonlocal last_screenshot_step
 			try:
 				url = await self._session.get_current_page_url()
 				title = await self._session.get_current_page_title()
@@ -61,13 +86,41 @@ class AgentExplorer:
 					url=url,
 					page_title=title,
 				)
+
+				# In PREPARE mode, take a screenshot at each step (replacing the previous one)
+				if mode == ExecutionMode.PREPARE:
+					try:
+						screenshot_bytes = await self._session.take_screenshot()
+						# Remove previous screenshot step if exists
+						if last_screenshot_step is not None:
+							recorder.trace.steps = [
+								s for s in recorder.trace.steps
+								if not (s.kind == TraceStepKind.SCREENSHOT and s.step_number == last_screenshot_step)
+							]
+						# Record new screenshot
+						step = record_screenshot_bytes(
+							recorder,
+							'prepare 证据截图',
+							screenshot_bytes,
+						)
+						last_screenshot_step = step.step_number
+					except Exception as e:
+						logger.debug('Failed to take screenshot: %s', e)
+
 			except Exception:
 				logger.warning('Failed to record agent step', exc_info=True)
 
 		try:
 			result = await agent.run(max_steps=max_steps, on_step_end=on_step_end)
 			self.last_history = result
+
 			await self._record_prepare_evidence_screenshot(mode, recorder)
+			failure_message = _agent_failure_message(result)
+			if failure_message:
+				return recorder.fail(
+					failure_type=FailureType.SUBMIT_FAILED,
+					message=f'Agent 探索失败: {failure_message}',
+				)
 			return recorder.complete(f'Agent 探索完成: {result}')
 		except Exception as exc:
 			return recorder.fail(
@@ -90,20 +143,16 @@ class AgentExplorer:
 				'prepare 证据截图',
 				screenshot_bytes,
 			)
+			logger.info('Prepare evidence screenshot taken successfully')
 		except Exception as e:
 			logger.warning('Failed to take prepare evidence screenshot: %s', e)
-		finally:
-			# 截图后关闭浏览器
-			try:
-				await self._session.close()
-			except Exception:
-				pass
 
 	def _build_task_prompt(
 		self,
 		operation: OperationContract,
 		params: dict[str, object],
 		mode: ExecutionMode,
+		entry_url: str | None = None,
 	) -> str:
 		params_text = ', '.join(f'{k}={v}' for k, v in params.items())
 		criteria_text = '\n'.join(f'  - {c}' for c in operation.success_criteria)
@@ -117,7 +166,12 @@ class AgentExplorer:
 		elif mode == ExecutionMode.COMMIT:
 			mode_instruction = '\n注意: 这是 commit 模式，完成操作并真实提交。'
 
+		url_instruction = ''
+		if entry_url:
+			url_instruction = f'\n请先导航到以下页面: {entry_url}'
+
 		return f"""你是一个后台操作助手。请完成以下操作:
+{url_instruction}
 
 操作: {operation.title}
 参数: {params_text}
@@ -130,4 +184,3 @@ class AgentExplorer:
 {mode_instruction}
 
 请一步步操作，完成后报告结果。"""
-
